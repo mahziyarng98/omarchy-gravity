@@ -46,9 +46,9 @@ check("empty", O.parseList(""), [])
 check("array passes through", O.parseList(["a", " ", "b"]), ["a", "b"])
 
 console.log("Store parsing")
-check("empty text", O.parseStore(""), { version: 2, apps: {} })
-check("not json", O.parseStore("{oops"), { version: 2, apps: {} })
-check("array instead of object", O.parseStore("[1,2]"), { version: 2, apps: {} })
+check("empty text", O.parseStore(""), { version: 2, apps: {}, suggestions: [] })
+check("not json", O.parseStore("{oops"), { version: 2, apps: {}, suggestions: [] })
+check("array instead of object", O.parseStore("[1,2]"), { version: 2, apps: {}, suggestions: [] })
 check("missing fields are filled", O.parseStore('{"apps":{"kitty":{}}}').apps.kitty,
   { launches: [], desktopId: "", name: "", icon: "" })
 check("launch times are sorted", O.parseStore('{"apps":{"k":{"launches":[30,10,20]}}}').apps.k.launches, [10, 20, 30])
@@ -190,6 +190,73 @@ check("a sweep with nothing to do says so, so it writes no file",
 check("a sweep preserves metadata",
   O.pruneApps({ live: { launches: [ago(1)], desktopId: "live", name: "Live", icon: "l" } }, NOW).apps.live.desktopId,
   "live")
+
+console.log("Cold start suggestions")
+var shelf = ["gimp", "inkscape", "vlc", "krita", "blender", "audacity", "libreoffice"]
+function suggest(id) { return { desktopId: id, name: id, icon: id, cls: id } }
+function marks(entries) {
+  return entries.map(function(e) { return e.cls + (e.pinned ? "#" : e.suggested ? "*" : "") })
+}
+
+check("an empty store still fills the ring",
+  marks(rank({}, { suggestions: shelf, suggest: suggest })),
+  ["gimp*", "inkscape*", "vlc*", "krita*", "blender*", "audacity*"])
+check("suggestions are flagged and carry no count",
+  [rank({}, { suggestions: shelf, suggest: suggest })[0].suggested,
+   rank({}, { suggestions: shelf, suggest: suggest })[0].count],
+  [true, 0])
+check("real apps and pins come first, suggestions take what is left",
+  marks(rank({ firefox: { launches: [ago(1), ago(2)] }, kitty: { launches: [ago(3)] } },
+    { pinned: "obsidian", suggestions: shelf, suggest: suggest })),
+  ["obsidian#", "firefox", "kitty", "gimp*", "inkscape*", "vlc*"])
+
+// The shrink: one more real app each time, one fewer suggestion.
+var growing = {}
+var shrinking = []
+var classes = ["firefox", "kitty", "code", "chromium", "obsidian", "mpv"]
+for (var g = 0; g < classes.length; g++) {
+  growing[classes[g]] = { launches: [ago(1 + g)] }
+  shrinking.push(rank(growing, { suggestions: shelf, suggest: suggest })
+    .filter(function(e) { return e.suggested }).length)
+}
+check("suggestions give way one by one as real usage grows", shrinking, [5, 4, 3, 2, 1, 0])
+check("a full ring of real apps has no suggestions at all",
+  marks(rank(growing, { suggestions: shelf, suggest: suggest })).join(" ").indexOf("*"), -1)
+
+console.log("Suggestions never duplicate what is already there")
+check("not an app already ranked by its window class",
+  marks(rank({ gimp: { launches: [ago(1)] } }, { slots: 3, suggestions: shelf, suggest: suggest })),
+  ["gimp", "inkscape*", "vlc*"])
+check("not an app already pinned",
+  marks(rank({}, { slots: 3, pinned: "vlc", suggestions: shelf, suggest: suggest })),
+  ["vlc#", "gimp*", "inkscape*"])
+check("not by desktop id either, when the window class differs",
+  marks(rank({ Gimp: { launches: [ago(1)] } },
+    { slots: 3,
+      describe: function() { return { desktopId: "gimp", name: "GIMP", icon: "gimp" } },
+      suggestions: shelf,
+      suggest: suggest })),
+  ["Gimp", "inkscape*", "vlc*"])
+check("an ignored app is not suggested either",
+  marks(rank({}, { slots: 3, ignored: "gimp, inkscape", suggestions: shelf, suggest: suggest })),
+  ["vlc*", "krita*", "blender*"])
+check("the same inputs give the same ring, every time",
+  marks(rank({}, { suggestions: shelf, suggest: suggest })),
+  marks(rank({}, { suggestions: shelf, suggest: suggest })))
+
+console.log("Suggestions that no longer resolve")
+check("an uninstalled pick is skipped and the next one takes the slot",
+  marks(rank({}, { slots: 3, suggestions: shelf,
+    suggest: function(id) { return id === "gimp" || id === "inkscape" ? null : suggest(id) } })),
+  ["vlc*", "krita*", "blender*"])
+check("nothing resolvable leaves a short ring rather than a broken one",
+  rank({}, { suggestions: shelf, suggest: function() { return null } }).length, 0)
+check("no suggest callback at all is simply the old behaviour",
+  rank({}, { suggestions: shelf }).length, 0)
+check("a resolved entry missing its id is refused",
+  rank({}, { suggestions: ["x"], suggest: function() { return { name: "x", icon: "x" } } }).length, 0)
+check("suggestions survive a store round trip",
+  O.parseStore(O.serializeStore({}, ["gimp", "vlc"])).suggestions, ["gimp", "vlc"])
 
 console.log("Ring geometry")
 check("first slot sits at twelve o'clock", O.angleFor(0, 6, 0), -90)

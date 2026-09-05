@@ -33,8 +33,13 @@ Item {
   readonly property string stateDir: (Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")) + "/omarchy/gravity"
   readonly property string usagePath: stateDir + "/usage.json"
 
-  // class -> { count, last, desktopId, name, icon }
+  // class -> { launches: [...], desktopId, name, icon }
   property var apps: ({})
+
+  // Desktop ids held in reserve to fill a ring that real usage has not filled
+  // yet. Rolled once and persisted, so a cold-start ring is the same shelf
+  // every time you open it.
+  property var suggestions: []
   property bool storeLoaded: false
   property bool dirReady: false
   property bool writePending: false
@@ -84,6 +89,83 @@ Item {
     writeDebounce.restart()
   }
 
+  // The pool is Omarchy's own launcher list -- DesktopEntries minus NoDisplay,
+  // minus Hidden/OnlyShowIn/NotShowIn, minus the launcher.hides list -- rather
+  // than a second set of rules invented here. On top of that a suggestion has
+  // to be something a user could actually click: an icon to draw and a command
+  // to run. Anything without both is a service or a MIME shim, whatever its
+  // desktop file claims.
+  function suggestionPool() {
+    var library = root.shell ? root.shell.appLibrary : null
+    if (!library || typeof library.sortedEntries !== "function") return []
+    var rows = []
+    try {
+      rows = library.sortedEntries("") || []
+    } catch (e) {
+      return []
+    }
+    var out = []
+    for (var i = 0; i < rows.length; i++) {
+      var entry = rows[i] && rows[i].entry
+      if (!entry || entry.noDisplay === true) continue
+      var id = String(entry.id || "")
+      if (!id) continue
+      if (!String(entry.icon || "")) continue
+      if (!String(entry.execString || entry.command || "")) continue
+      out.push(id)
+    }
+    return out
+  }
+
+  function shuffled(values) {
+    var out = values.slice()
+    for (var i = out.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1))
+      var swap = out[i]
+      out[i] = out[j]
+      out[j] = swap
+    }
+    return out
+  }
+
+  // Keep the reserve honest without disturbing it: entries that no longer
+  // resolve are dropped, the rest keep their order and therefore their place
+  // in the ring, and the list is topped back up from what is installed. The
+  // only two things that change a suggestion are the two that should -- it was
+  // uninstalled, or a real app took its slot.
+  function refreshSuggestions() {
+    if (!root.storeLoaded) return
+    var pool = suggestionPool()
+    if (!pool.length) return
+
+    var installed = {}
+    for (var i = 0; i < pool.length; i++) installed[pool[i]] = true
+
+    var kept = []
+    var seen = {}
+    for (var j = 0; j < root.suggestions.length; j++) {
+      var id = String(root.suggestions[j])
+      if (!installed[id] || seen[id]) continue
+      seen[id] = true
+      kept.push(id)
+    }
+    var changed = kept.length !== root.suggestions.length
+
+    if (kept.length < Orbit.SUGGESTION_POOL) {
+      var candidates = []
+      for (var k = 0; k < pool.length; k++) if (!seen[pool[k]]) candidates.push(pool[k])
+      candidates = root.shuffled(candidates)
+      for (var m = 0; m < candidates.length && kept.length < Orbit.SUGGESTION_POOL; m++) {
+        kept.push(candidates[m])
+        changed = true
+      }
+    }
+
+    if (!changed) return
+    root.suggestions = kept
+    writeDebounce.restart()
+  }
+
   function recordClass(cls) {
     var name = Orbit.normalizeClass(cls)
     if (!name) return
@@ -97,12 +179,15 @@ Item {
   // coming up and the first read finishing.
   function adoptStore(raw) {
     if (root.storeLoaded) return
-    root.apps = Orbit.mergeApps(Orbit.parseStore(raw).apps, root.apps)
+    var stored = Orbit.parseStore(raw)
+    root.apps = Orbit.mergeApps(stored.apps, root.apps)
+    root.suggestions = stored.suggestions
     root.storeLoaded = true
     // A machine that was off for a week comes back with a store full of
     // launches that expired while it slept. Sweep once on load rather than
     // waiting up to ten minutes for the timer to notice.
     root.sweep()
+    root.refreshSuggestions()
     if (root.writePending) writeDebounce.restart()
   }
 
@@ -118,7 +203,7 @@ Item {
       return
     }
     root.writePending = false
-    usageFile.setText(Orbit.serializeStore(root.apps))
+    usageFile.setText(Orbit.serializeStore(root.apps, root.suggestions))
   }
 
   // ---- IPC. `omarchy-shell gravity-usage ...` is a maintenance surface for
@@ -190,6 +275,32 @@ Item {
     function path(): string {
       return root.usagePath
     }
+
+    // The reserve, in the order the ring will draw from it.
+    function suggestions(): string {
+      if (!root.suggestions.length) return "no suggestions held"
+      return root.suggestions.join("\n")
+    }
+
+    // Throw the shelf away and roll a new one.
+    function reroll(): string {
+      root.suggestions = []
+      root.refreshSuggestions()
+      return root.suggestions.length
+        ? "rerolled " + root.suggestions.length + " suggestions"
+        : "no installed apps to suggest"
+    }
+  }
+
+  Connections {
+    target: root.shell ? root.shell.appLibrary : null
+    ignoreUnknownSignals: true
+    function onAppsChanged() { root.refreshSuggestions() }
+  }
+
+  Connections {
+    target: DesktopEntries.applications
+    function onValuesChanged() { root.refreshSuggestions() }
   }
 
   Connections {

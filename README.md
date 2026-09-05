@@ -43,6 +43,10 @@ configure anything.
   every time, rather than cycling.
 - **Pinning.** Apps you always want within reach hold their slot regardless of
   count, in the order you list them, with the ranking filling what is left.
+- **Never an empty ring.** A fresh install has nothing to rank, so the spare
+  slots fill with suggestions drawn from your installed apps. They are a
+  placeholder, not a ranking: every one gives way the moment a real app earns
+  the slot, and the ring stops suggesting entirely once six real ones fill it.
 - **A fixed ring, not a list.** At most six apps, always on one circle, always
   in the same places — so a slot becomes a position you can aim at from muscle
   memory rather than a row you have to read.
@@ -220,6 +224,33 @@ Focusing an existing window does **not** count — no window was created — so
 using Gravity to switch to an app you already have open never inflates its
 position.
 
+### Cold start
+
+Ranking something you have not done yet is impossible, and a ring holding two
+icons in a lot of empty space looks broken rather than new. So slots that
+pinning and the ranking have not claimed are filled with suggestions, in that
+order of priority:
+
+1. pinned apps
+2. apps ranked by launches in the last three days
+3. suggestions, filling whatever is still empty
+
+A suggestion never displaces anything real. One pinned app and two ranked apps
+give you three suggestions; a sixth real app leaves none. The hub says
+**Suggested** rather than a launch count for these, because a count of zero
+would read as a verdict on the app rather than on the empty slot.
+
+They are drawn from the same list Omarchy's own launcher shows — desktop
+entries minus `NoDisplay`, minus `Hidden` / `OnlyShowIn` / `NotShowIn`, minus
+`launcher.hides` — narrowed to entries that have both an icon to draw and a
+command to run. `ignored` applies to suggestions too, so anything you never
+want proposed can be named there.
+
+The picks are rolled once and persisted, so the cold-start ring looks the same
+tomorrow as it does today rather than reshuffling on every open. A pick is only
+ever replaced when it has to be: a real app took the slot, or the app was
+uninstalled and no longer resolves.
+
 ## The usage store
 
 ```
@@ -231,6 +262,9 @@ lives under the XDG state directory, never in the config tree. It is plain
 JSON, written by the plugin's background service and safe to read, edit, or
 delete — a missing or corrupt file costs you the ranking, and using the machine
 rebuilds it.
+
+Alongside the launches, `suggestions` holds the rolled cold-start picks as
+desktop ids, in the order the ring draws from them.
 
 One list of launch times per window class. Timestamps are kept for four days
 and count for three: the extra day is slack for a clock that steps backwards
@@ -254,7 +288,8 @@ a truthful ranking.
       "name": "v2rayN",
       "icon": "v2rayn"
     }
-  }
+  },
+  "suggestions": ["localsend", "vlc", "libreoffice-calc"]
 }
 ```
 
@@ -266,6 +301,8 @@ omarchy-shell gravity-usage forget chromium  # drop one app
 omarchy-shell gravity-usage reset            # start over
 omarchy-shell gravity-usage record v2rayN    # count a launch by hand
 omarchy-shell gravity-usage path             # where the store lives
+omarchy-shell gravity-usage suggestions      # the cold-start picks, in order
+omarchy-shell gravity-usage reroll           # throw them away and roll again
 ```
 
 `record` exists so you can test the ranking without waiting for real usage to

@@ -22,6 +22,12 @@ var WINDOW_SECONDS = 3 * 24 * 60 * 60      // 72h: what counts toward a rank
 // inside the window.
 var RETENTION_SECONDS = 4 * 24 * 60 * 60
 
+// How many suggestion candidates to keep on hand. More than the ring can ever
+// show, because some of them will collide with what the user actually runs and
+// get skipped -- and because holding a few spare means an uninstall does not
+// leave a hole until the next top-up.
+var SUGGESTION_POOL = 12
+
 // The circle holds six comfortably. More than that and the icons crowd each
 // other at any radius that still fits a 1080p screen, which is the whole
 // reason the orbit is a fixed ring rather than a grid.
@@ -72,7 +78,23 @@ function indexList(values) {
 // ------------------------------------------------------------- the store
 
 function emptyStore() {
-  return { version: STORE_VERSION, apps: {} }
+  return { version: STORE_VERSION, apps: {}, suggestions: [] }
+}
+
+// Desktop ids, in the order they were rolled. Persisted so a cold-start ring
+// looks the same tomorrow as it does today: re-rolling on every panel open
+// would make the suggestions feel like noise rather than a shelf.
+function sanitizeSuggestions(raw) {
+  var out = []
+  if (!Array.isArray(raw)) return out
+  var seen = {}
+  for (var i = 0; i < raw.length; i++) {
+    var id = normalizeClass(raw[i])
+    if (!id || seen[id]) continue
+    seen[id] = true
+    out.push(id)
+  }
+  return out
 }
 
 // A record is the launch times themselves, ascending, plus whatever we know
@@ -159,11 +181,16 @@ function parseStore(raw) {
     if (!key) continue
     store.apps[key] = sanitizeRecord(apps[cls])
   }
+  store.suggestions = sanitizeSuggestions(parsed.suggestions)
   return store
 }
 
-function serializeStore(apps) {
-  return JSON.stringify({ version: STORE_VERSION, apps: apps || {} }, null, 2) + "\n"
+function serializeStore(apps, suggestions) {
+  return JSON.stringify({
+    version: STORE_VERSION,
+    apps: apps || {},
+    suggestions: sanitizeSuggestions(suggestions)
+  }, null, 2) + "\n"
 }
 
 // The stored key for a class, matched case-insensitively so "Chromium" and
@@ -277,6 +304,7 @@ function entryFor(apps, cls, describe, pinned, now) {
     name: String((described && described.name) || record.name || normalizeClass(cls)),
     icon: String((described && described.icon) || record.icon || ""),
     pinned: pinned === true,
+    suggested: false,
     // A class with no desktop entry on either side can still be focused if a
     // window of it exists, but it can never be launched -- so it is only
     // worth a slot when the user asked for it by name. `hidden` is the same
@@ -311,14 +339,21 @@ function rankApps(apps, options) {
   var now = Math.floor(Number(opts.now))
   if (!isFinite(now) || now <= 0) now = Math.floor(Date.now() / 1000)
   var taken = {}
+  var takenDesktop = {}
   var out = []
   var i
+
+  function claim(entry) {
+    taken[classKey(entry.cls)] = true
+    if (entry.desktopId) takenDesktop[String(entry.desktopId).toLowerCase()] = true
+    out.push(entry)
+  }
 
   for (i = 0; i < pinned.length && out.length < slots; i++) {
     var key = classKey(pinned[i])
     if (taken[key] || ignored[key]) continue
     taken[key] = true
-    out.push(entryFor(apps, pinned[i], opts.describe, true, now))
+    claim(entryFor(apps, pinned[i], opts.describe, true, now))
   }
 
   var auto = []
@@ -333,7 +368,43 @@ function rankApps(apps, options) {
   }
   auto.sort(compareEntries)
 
-  for (i = 0; i < auto.length && out.length < slots; i++) out.push(auto[i])
+  for (i = 0; i < auto.length && out.length < slots; i++) claim(auto[i])
+
+  // ---- Cold start. Whatever the user has actually launched comes first and
+  // is never displaced; suggestions only ever occupy slots that would
+  // otherwise be empty, which is why a ring fills up with real apps and the
+  // suggestions quietly disappear one by one as it does.
+  //
+  // `suggest(id)` resolves a stored desktop id to something launchable, or
+  // null when the app has been uninstalled since it was rolled -- in which
+  // case the next candidate takes the slot rather than leaving a hole.
+  var suggestions = Array.isArray(opts.suggestions) ? opts.suggestions : []
+  var suggest = typeof opts.suggest === "function" ? opts.suggest : null
+  for (i = 0; i < suggestions.length && out.length < slots && suggest; i++) {
+    var resolved = null
+    try {
+      resolved = suggest(suggestions[i])
+    } catch (e) {
+      resolved = null
+    }
+    if (!resolved) continue
+    var suggestedCls = normalizeClass(resolved.cls || resolved.desktopId)
+    var suggestedId = String(resolved.desktopId || "")
+    if (!suggestedCls || !suggestedId) continue
+    if (taken[classKey(suggestedCls)] || takenDesktop[suggestedId.toLowerCase()]) continue
+    if (ignored[classKey(suggestedCls)]) continue
+    claim({
+      cls: suggestedCls,
+      count: 0,
+      last: 0,
+      desktopId: suggestedId,
+      name: String(resolved.name || suggestedCls),
+      icon: String(resolved.icon || ""),
+      pinned: false,
+      suggested: true,
+      launchable: true
+    })
+  }
   return out
 }
 
@@ -400,6 +471,7 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     STORE_VERSION: STORE_VERSION, MAX_SLOTS: MAX_SLOTS, MIN_SLOTS: MIN_SLOTS,
     WINDOW_SECONDS: WINDOW_SECONDS, RETENTION_SECONDS: RETENTION_SECONDS,
+    SUGGESTION_POOL: SUGGESTION_POOL, sanitizeSuggestions: sanitizeSuggestions,
     normalizeClass: normalizeClass, classKey: classKey, parseList: parseList,
     emptyStore: emptyStore, parseStore: parseStore, serializeStore: serializeStore,
     launchesWithin: launchesWithin, lastLaunchOf: lastLaunchOf,

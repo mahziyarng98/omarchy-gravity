@@ -56,6 +56,7 @@ Panel {
   readonly property string home: Quickshell.env("HOME")
   readonly property string usagePath: (Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")) + "/omarchy/gravity/usage.json"
   property var usageApps: ({})
+  property var suggestionIds: []
   property int usageRevision: 0
   // Desktop entries land after the shell starts and change as packages come
   // and go; bumping this re-resolves every name and icon in the ring.
@@ -99,14 +100,49 @@ Panel {
       ignored: root.ignoredClasses,
       slots: root.slotCount,
       now: Math.floor(Date.now() / 1000),
-      describe: function(cls) { return root.describeClass(cls) }
+      describe: function(cls) { return root.describeClass(cls) },
+      suggestions: root.suggestionIds,
+      suggest: function(id) { return root.describeSuggestion(id) }
     })
   }
   readonly property int appCount: apps.length
 
   function applyUsage(raw) {
-    root.usageApps = Orbit.parseStore(raw).apps
+    var stored = Orbit.parseStore(raw)
+    root.usageApps = stored.apps
+    root.suggestionIds = stored.suggestions
     root.usageRevision++
+  }
+
+  // Desktop id -> entry, rebuilt whenever the installed set changes. Suggestions
+  // are stored as ids because that is the only handle that survives a restart;
+  // this is what turns one back into something with a name, an icon and a
+  // window class to match against.
+  readonly property var entryIndex: {
+    root.entriesRevision
+    var map = ({})
+    var values = DesktopEntries.applications.values || []
+    for (var i = 0; i < values.length; i++) {
+      var entry = values[i]
+      if (entry && entry.id) map[String(entry.id)] = entry
+    }
+    return map
+  }
+
+  // Null means the app is gone since it was rolled, and the ring should fall
+  // through to the next candidate rather than draw a dead slot.
+  function describeSuggestion(id) {
+    var entry = root.entryIndex[String(id)]
+    if (!entry || entry.noDisplay === true) return null
+    if (!String(entry.icon || "")) return null
+    return {
+      desktopId: String(entry.id),
+      name: String(entry.name || entry.id),
+      icon: String(entry.icon || ""),
+      // StartupWMClass when the entry declares one, so clicking a suggestion
+      // focuses a window that is already open instead of launching a second.
+      cls: String(entry.startupClass || entry.id)
+    }
   }
 
   function iconUrl(app) {
@@ -569,6 +605,10 @@ Panel {
               text: {
                 if (!root.selectedApp) return ""
                 var app = root.selectedApp
+                // A suggestion has no usage to report, and saying "0 launches"
+                // would read as a judgement on the app rather than on the fact
+                // that the ring simply had a slot spare.
+                if (app.suggested) return "Suggested"
                 if (app.count <= 0) return app.pinned ? "Pinned" : "Not used lately"
                 var launches = (app.count === 1 ? "1 launch" : app.count + " launches") + " in 3d"
                 return app.pinned ? "Pinned · " + launches : launches
