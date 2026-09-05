@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.mahziyarng98.gravity",
+  "name": "Gravity",
+  "version": "1.0.0",
+  "author": "mahziyarng98",
+  "license": "MIT",
+  "description": "An orbital launcher that surfaces the apps you actually use, ranked by how often you open them",
+  "kinds": [
+    "bar-widget",
+    "service"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml",
+    "service": "Service.qml"
+  },
+  "barWidget": {
+    "displayName": "Gravity",
+    "description": "An orbital launcher that surfaces the apps you actually use, ranked by how often you open them",
+    "category": "Launcher",
+    "defaultSection": "left",
+    "allowMultiple": false,
+    "defaults": {
+      "pinned": "",
+      "ignored": "",
+      "slots": 6,
+      "orbitSeconds": 45
+    },
+    "schema": [
+      {
+        "key": "pinned",
+        "type": "string",
+        "label": "Pinned apps",
+        "description": "Comma-separated window classes that always hold a slot, in orbit order, e.g. \"v2rayn, org.gnome.Nautilus\". Run `hyprctl clients -j | grep class` to read a window's class.",
+        "defaultValue": ""
+      },
+      {
+        "key": "ignored",
+        "type": "string",
+        "label": "Ignored apps",
+        "description": "Comma-separated window classes that never earn a slot, however often they are launched.",
+        "defaultValue": ""
+      },
+      {
+        "key": "slots",
+        "type": "integer",
+        "label": "Apps in orbit",
+        "description": "How many icons sit on the ring. Six is the maximum the circle holds.",
+        "min": 3,
+        "max": 6,
+        "step": 1,
+        "defaultValue": 6
+      },
+      {
+        "key": "orbitSeconds",
+        "type": "integer",
+        "label": "Seconds per revolution",
+        "description": "How long the orbit takes to come back around. Rotation pauses whenever an icon is hovered or keyboard-selected.",
+        "min": 8,
+        "max": 240,
+        "step": 5,
+        "defaultValue": 45
+      }
+    ]
+  }
+}

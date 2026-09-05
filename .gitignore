@@ -1,0 +1,19 @@
+# Editors
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Omarchy leaves timestamped backups beside a plugin when it is removed
+*.bak
+*.bak.*
+.*.bak.*
+
+# Local scratch
+node_modules/
+*.log
