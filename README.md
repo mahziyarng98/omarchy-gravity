@@ -187,8 +187,8 @@ and hot-reload on save:
 
 | Key | Default | Effect |
 |---|---|---|
-| `pinned` | `""` | window classes that always hold a slot, in orbit order |
-| `ignored` | `""` | window classes that never earn a slot, however often they open |
+| `pinned` | `""` | window classes that always hold a slot, in orbit order, ahead of both ranking and suggestions |
+| `ignored` | `""` | window classes that never earn a slot — not by launches, not as a suggestion |
 | `slots` | `6` | how many icons sit on the ring (3–6; six is the maximum the circle holds) |
 | `orbitSeconds` | `45` | seconds per revolution |
 
@@ -198,6 +198,23 @@ class of a running window:
 ```bash
 hyprctl clients -j | jq -r '.[].class' | sort -u
 ```
+
+> [!WARNING]
+> **A suggestion's class is not always its desktop id**, and this is the one
+> thing that will bite you. `ignored` and `pinned` are matched on the window
+> class, which for a suggested app is its `StartupWMClass` when the `.desktop`
+> entry declares one, and its desktop id only when it does not. So
+> `voxtype-configure.desktop` declaring `StartupWMClass=voxtype` is ignored by
+> naming `voxtype`, **not** `voxtype-configure` — naming the id there looks
+> right and silently does nothing. When an entry is quietly not being matched,
+> read the class off the file:
+>
+> ```bash
+> grep -H StartupWMClass /usr/share/applications/<id>.desktop \
+>   ~/.local/share/applications/<id>.desktop 2>/dev/null
+> ```
+>
+> No output means the desktop id is the class, and naming the id is correct.
 
 A pinned app is shown even if it has never been launched and even if it has no
 `.desktop` entry — you asked for it by name. An app that is neither pinned nor
@@ -283,7 +300,7 @@ a truthful ranking.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "apps": {
     "v2rayN": {
       "launches": [1788618278, 1788640912, 1788702233],

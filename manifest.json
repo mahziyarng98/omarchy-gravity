@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "io.github.mahziyarng98.gravity",
   "name": "Gravity",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "author": "mahziyarng98",
   "license": "MIT",
-  "description": "An orbital launcher that surfaces the apps you actually use, ranked by how often you open them",
+  "description": "An orbital launcher that surfaces the apps you actually use, ranked by launches in a rolling three-day window, with suggestions filling any slot real usage has not claimed yet",
   "kinds": [
     "bar-widget",
     "service"
@@ -16,7 +16,7 @@
   },
   "barWidget": {
     "displayName": "Gravity",
-    "description": "An orbital launcher that surfaces the apps you actually use, ranked by how often you open them",
+    "description": "An orbital launcher that surfaces the apps you actually use, ranked by launches in a rolling three-day window, with suggestions filling any slot real usage has not claimed yet",
     "category": "Launcher",
     "defaultSection": "left",
     "allowMultiple": false,
@@ -31,21 +31,21 @@
         "key": "pinned",
         "type": "string",
         "label": "Pinned apps",
-        "description": "Comma-separated window classes that always hold a slot, in orbit order, e.g. \"v2rayn, org.gnome.Nautilus\". Run `hyprctl clients -j | grep class` to read a window's class.",
+        "description": "Comma-separated window classes that always hold a slot, in orbit order, e.g. \"v2rayn, org.gnome.Nautilus\". Pins outrank both launch counts and suggestions. Run `hyprctl clients -j | grep class` to read a window's class.",
         "defaultValue": ""
       },
       {
         "key": "ignored",
         "type": "string",
         "label": "Ignored apps",
-        "description": "Comma-separated window classes that never earn a slot, however often they are launched.",
+        "description": "Comma-separated window classes that never earn a slot -- not by launches, not as a cold-start suggestion. Matched on the window class: an app's StartupWMClass when its .desktop entry declares one, otherwise its desktop id.",
         "defaultValue": ""
       },
       {
         "key": "slots",
         "type": "integer",
         "label": "Apps in orbit",
-        "description": "How many icons sit on the ring. Six is the maximum the circle holds.",
+        "description": "How many icons sit on the ring. Six is the maximum the circle holds; any slot not filled by a pin or by recent usage gets a suggestion.",
         "min": 3,
         "max": 6,
         "step": 1,
