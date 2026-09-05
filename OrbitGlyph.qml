@@ -20,6 +20,10 @@ Item {
   property bool showTracks: true
   property bool spinning: true
   // Multiplier on the orbital periods. Below 1 is slower.
+  //
+  // Set it once per instance and leave it alone: it feeds the animator
+  // durations below, and changing the duration of a running animator restarts
+  // it, which shows up as the mark stalling rather than turning.
   property real speed: 1.0
 
   readonly property real unit: Math.min(width, height)

@@ -101,7 +101,14 @@ BarWidget {
     tooltipText: "Gravity"
     // The mark never stops turning, panel open or closed -- it is the one
     // thing in the bar that says this widget is watching what you launch.
-    // It only picks up speed while the orbit is on screen.
+    //
+    // It used to speed up while the orbit was on screen. That is gone: `speed`
+    // feeds the glyph's animator durations, and changing a running animator's
+    // duration restarts it, so animating the speed restarted the rotation on
+    // every frame of the transition and the mark visibly stalled. A flourish
+    // that costs the one animation that is supposed to be perpetual is not
+    // worth it -- and the bar sits under the panel's scrim while open, so
+    // almost nobody ever saw it.
     iconComponent: Component {
       Item {
         OrbitGlyph {
@@ -110,11 +117,6 @@ BarWidget {
           height: parent.height
           coreColor: Color.accent
           satelliteColor: button.foreground
-          speed: root.opened ? 2.2 : 1.0
-
-          Behavior on speed {
-            NumberAnimation { duration: 320; easing.type: Easing.OutCubic }
-          }
         }
       }
     }

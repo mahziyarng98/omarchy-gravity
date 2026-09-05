@@ -38,7 +38,6 @@ Item {
   property bool storeLoaded: false
   property bool dirReady: false
   property bool writePending: false
-  property int totalLaunches: 0
 
   function nowSeconds() {
     return Math.floor(Date.now() / 1000)
@@ -67,7 +66,6 @@ Item {
     var name = Orbit.normalizeClass(cls)
     if (!name) return
     root.apps = Orbit.recordLaunch(root.apps, name, root.nowSeconds(), root.describe(name))
-    root.totalLaunches++
     writeDebounce.restart()
   }
 
@@ -121,19 +119,24 @@ Item {
       return "recorded " + Orbit.normalizeClass(windowClass)
     }
 
-    // Forget one app, or everything.
+    // Forget one app, or everything. Both mark the store loaded even if the
+    // first read has not landed yet: deleting is a statement about what the
+    // store should now contain, and adoptStore would otherwise merge the file
+    // back in a moment later and silently undo it.
     function forget(windowClass: string): string {
       var key = Orbit.findKey(root.apps, windowClass)
       if (!key) return "unknown: " + Orbit.normalizeClass(windowClass)
       var next = {}
       for (var cls in root.apps) if (cls !== key) next[cls] = root.apps[cls]
       root.apps = next
+      root.storeLoaded = true
       writeDebounce.restart()
       return "forgot " + key
     }
 
     function reset(): string {
       root.apps = ({})
+      root.storeLoaded = true
       writeDebounce.restart()
       return "usage cleared"
     }
