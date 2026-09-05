@@ -258,6 +258,18 @@ check("a resolved entry missing its id is refused",
 check("suggestions survive a store round trip",
   O.parseStore(O.serializeStore({}, ["gimp", "vlc"])).suggestions, ["gimp", "vlc"])
 
+console.log("The reserve is capped by the format itself")
+var overlong = []
+for (var v = 0; v < 20; v++) overlong.push("app" + v)
+check("parsing caps at the pool size", O.parseStore(JSON.stringify({ apps: {}, suggestions: overlong })).suggestions.length,
+  O.SUGGESTION_POOL)
+check("serializing caps too, so an over-long list cannot be written back",
+  JSON.parse(O.serializeStore({}, overlong)).suggestions.length, O.SUGGESTION_POOL)
+check("the cap keeps the front of the list, which is what the ring draws from",
+  O.parseStore(JSON.stringify({ apps: {}, suggestions: overlong })).suggestions[0], "app0")
+check("duplicates do not consume cap slots",
+  O.parseStore(JSON.stringify({ apps: {}, suggestions: ["a", "a", "a", "b"] })).suggestions, ["a", "b"])
+
 console.log("Ring geometry")
 check("first slot sits at twelve o'clock", O.angleFor(0, 6, 0), -90)
 check("six slots are sixty degrees apart", O.angleFor(1, 6, 0), -30)

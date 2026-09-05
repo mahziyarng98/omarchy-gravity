@@ -244,7 +244,10 @@ They are drawn from the same list Omarchy's own launcher shows — desktop
 entries minus `NoDisplay`, minus `Hidden` / `OnlyShowIn` / `NotShowIn`, minus
 `launcher.hides` — narrowed to entries that have both an icon to draw and a
 command to run. `ignored` applies to suggestions too, so anything you never
-want proposed can be named there.
+want proposed can be named there — and it is applied when the reserve is
+filled, not when the ring is drawn, so an ignored app never occupies one of
+the held slots in the first place. Editing the list takes effect immediately:
+anything it newly covers is dropped from the reserve and replaced.
 
 The picks are rolled once and persisted, so the cold-start ring looks the same
 tomorrow as it does today rather than reshuffling on every open. A pick is only

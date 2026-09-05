@@ -48,6 +48,47 @@ Item {
     return Math.floor(Date.now() / 1000)
   }
 
+  // The widget's own `ignored` list, read from the same shell.json entry the
+  // panel reads. A service is not handed the widget's settings -- it is not a
+  // widget -- so it finds its own entry by manifest id. Reading it here is
+  // what lets an ignored app be kept out of the reserve entirely instead of
+  // occupying a slot and being skipped later when the ring is drawn.
+  readonly property var ignoredClasses: {
+    var config = root.shell && root.shell.shellConfig ? root.shell.shellConfig : null
+    var id = root.manifest && root.manifest.id ? String(root.manifest.id) : ""
+    if (!config || !id) return []
+
+    var entry = null
+    var layout = config.bar && config.bar.layout ? config.bar.layout : {}
+    var sections = ["left", "center", "right"]
+    for (var s = 0; s < sections.length && !entry; s++) {
+      var list = layout[sections[s]]
+      if (!list || !Array.isArray(list)) continue
+      for (var i = 0; i < list.length; i++) {
+        if (list[i] && String(list[i].id) === id) { entry = list[i]; break }
+      }
+    }
+    // A non-bar placement is possible for any plugin, so look there too rather
+    // than silently ignoring the setting when the widget is not on the bar.
+    if (!entry && Array.isArray(config.plugins)) {
+      for (var j = 0; j < config.plugins.length; j++) {
+        if (config.plugins[j] && String(config.plugins[j].id) === id) { entry = config.plugins[j]; break }
+      }
+    }
+    return entry ? Orbit.parseList(entry.ignored) : []
+  }
+
+  readonly property var ignoredIndex: {
+    var index = ({})
+    for (var i = 0; i < root.ignoredClasses.length; i++) index[Orbit.classKey(root.ignoredClasses[i])] = true
+    return index
+  }
+
+  // Editing the list should take effect now, not at the next reroll: anything
+  // it newly covers falls out of the pool below, so the refresh drops it from
+  // the reserve and pulls a fresh candidate up in its place.
+  onIgnoredIndexChanged: root.refreshSuggestions()
+
   // Whatever we can learn about a class at the moment it opens, cached into
   // the record. The panel re-resolves this live, but a cached name and icon
   // keep an app readable in the orbit even when its .desktop file is gone
@@ -112,6 +153,10 @@ Item {
       if (!id) continue
       if (!String(entry.icon || "")) continue
       if (!String(entry.execString || entry.command || "")) continue
+      // Matched on the same class the ring would draw this candidate under --
+      // StartupWMClass when the entry declares one, the desktop id otherwise --
+      // so `ignored` means the same thing here as it does everywhere else.
+      if (root.ignoredIndex[Orbit.classKey(String(entry.startupClass || id))]) continue
       out.push(id)
     }
     return out
@@ -151,6 +196,14 @@ Item {
     }
     var changed = kept.length !== root.suggestions.length
 
+    // Anything above the cap goes now, not at the next reroll, so the reserve
+    // is never observably longer than it claims to be -- a hand-edited file is
+    // normalised on the load that follows it.
+    if (kept.length > Orbit.SUGGESTION_POOL) {
+      kept = kept.slice(0, Orbit.SUGGESTION_POOL)
+      changed = true
+    }
+
     if (kept.length < Orbit.SUGGESTION_POOL) {
       var candidates = []
       for (var k = 0; k < pool.length; k++) if (!seen[pool[k]]) candidates.push(pool[k])
@@ -188,7 +241,10 @@ Item {
     // waiting up to ten minutes for the timer to notice.
     root.sweep()
     root.refreshSuggestions()
-    if (root.writePending) writeDebounce.restart()
+    // Normalise the file itself on every load: a store written by an older
+    // version, or edited by hand, is rewritten in the current shape rather
+    // than left on disk disagreeing with what is held in memory.
+    writeDebounce.restart()
   }
 
   function writeStore() {

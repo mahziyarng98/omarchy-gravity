@@ -84,11 +84,17 @@ function emptyStore() {
 // Desktop ids, in the order they were rolled. Persisted so a cold-start ring
 // looks the same tomorrow as it does today: re-rolling on every panel open
 // would make the suggestions feel like noise rather than a shelf.
-function sanitizeSuggestions(raw) {
+//
+// The cap is enforced here rather than only where the list is built, so it is
+// an invariant of the format itself: nothing that parses or serializes a store
+// can hold more than SUGGESTION_POOL, however the list got that long.
+function sanitizeSuggestions(raw, cap) {
   var out = []
   if (!Array.isArray(raw)) return out
+  var limit = Math.floor(Number(cap))
+  if (!isFinite(limit) || limit < 0) limit = SUGGESTION_POOL
   var seen = {}
-  for (var i = 0; i < raw.length; i++) {
+  for (var i = 0; i < raw.length && out.length < limit; i++) {
     var id = normalizeClass(raw[i])
     if (!id || seen[id]) continue
     seen[id] = true
@@ -392,6 +398,13 @@ function rankApps(apps, options) {
     var suggestedId = String(resolved.desktopId || "")
     if (!suggestedCls || !suggestedId) continue
     if (taken[classKey(suggestedCls)] || takenDesktop[suggestedId.toLowerCase()]) continue
+    // The service already keeps ignored apps out of the reserve, so this is
+    // usually a no-op -- but it is not redundant. Between the moment the user
+    // edits `ignored` and the moment the rewritten reserve reaches the panel
+    // through the store file, the panel holds the new setting and the old
+    // picks; without this an ignored app would flash into an open ring for
+    // that gap. It also keeps rankApps honest as a pure function for any
+    // caller that has not pre-filtered its candidates.
     if (ignored[classKey(suggestedCls)]) continue
     claim({
       cls: suggestedCls,
