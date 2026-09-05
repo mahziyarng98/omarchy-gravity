@@ -5,6 +5,8 @@ surfaces the apps you actually use. Six icons on one turning ring, centred on
 the screen, ranked by how often you open them — not by a favourites list you
 have to maintain.
 
+![The Gravity orbit: six apps on a ring around a hub naming the app under the cursor](preview.png)
+
 > [!IMPORTANT]
 > **Gravity is an Omarchy plugin, not a standalone Quickshell widget.** It is
 > loaded by `omarchy-shell`'s plugin loader, registers its IPC through it,
@@ -13,16 +15,8 @@ have to maintain.
 > vanilla Hyprland + Quickshell without significant rework — see
 > [Requirements](#requirements) for exactly what it leans on.
 
-## Screenshots
-
-<!-- Replace these with real captures before sharing the repo widely.
-     preview.png  — the ring populated with five or six apps, one selected
-     orbit.gif    — the staggered burst on open, then the rotation pausing
-                    under the cursor -->
-
-| The orbit | Opening |
-|---|---|
-| _`preview.png` — to be added_ | _`orbit.gif` — to be added_ |
+<!-- Still worth adding: orbit.gif — the staggered burst on open, then the
+     rotation pausing as the cursor lands on an icon. A still cannot show it. -->
 
 ## What makes it different
 
