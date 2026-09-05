@@ -8,7 +8,19 @@
 // reads a file, spawns a process, or touches a QML object -- the callers own
 // all of that, and hand in what they know through `options`.
 
-var STORE_VERSION = 1
+var STORE_VERSION = 2
+
+// The ranking is a rolling window, not a lifetime tally: what the orbit shows
+// is what you have actually been reaching for lately. A launch counts for
+// three days and then stops counting, whether or not anything new happens --
+// so an app you hammered last week falls out on its own.
+var WINDOW_SECONDS = 3 * 24 * 60 * 60      // 72h: what counts toward a rank
+
+// Kept on disk a day longer than it counts. The extra day is slack for a
+// clock that steps backwards (NTP correction, a timezone-confused RTC after a
+// reboot) so a small negative jump cannot silently erase history that is still
+// inside the window.
+var RETENTION_SECONDS = 4 * 24 * 60 * 60
 
 // The circle holds six comfortably. More than that and the icons crowd each
 // other at any radius that still fits a 1080p screen, which is the whole
@@ -63,17 +75,68 @@ function emptyStore() {
   return { version: STORE_VERSION, apps: {} }
 }
 
+// A record is the launch times themselves, ascending, plus whatever we know
+// about the app. Version 1 stored a single lifetime integer instead; such a
+// record parses to an empty launch list, which is the migration -- the old
+// total cannot be spread back over a window it never described, and a few
+// days of use rebuilds a truthful one.
 function sanitizeRecord(raw) {
   var record = raw && typeof raw === "object" ? raw : {}
-  var count = Number(record.count)
-  var last = Number(record.last)
+  var launches = []
+  if (Array.isArray(record.launches)) {
+    for (var i = 0; i < record.launches.length; i++) {
+      var stamp = Math.floor(Number(record.launches[i]))
+      if (isFinite(stamp) && stamp > 0) launches.push(stamp)
+    }
+    launches.sort(function(a, b) { return a - b })
+  }
   return {
-    count: isFinite(count) && count > 0 ? Math.floor(count) : 0,
-    last: isFinite(last) && last > 0 ? Math.floor(last) : 0,
+    launches: launches,
     desktopId: String(record.desktopId || ""),
     name: String(record.name || ""),
     icon: String(record.icon || "")
   }
+}
+
+// How many of these launches still count, as of `now`. A launch exactly at
+// the edge counts: three days old is not yet older than three days.
+function launchesWithin(launches, now, windowSeconds) {
+  var cutoff = Number(now) - (windowSeconds === undefined ? WINDOW_SECONDS : Number(windowSeconds))
+  var total = 0
+  for (var i = 0; i < launches.length; i++) if (launches[i] >= cutoff) total++
+  return total
+}
+
+function lastLaunchOf(launches) {
+  return launches.length ? launches[launches.length - 1] : 0
+}
+
+function prunedLaunches(launches, now) {
+  var cutoff = Number(now) - RETENTION_SECONDS
+  var kept = []
+  for (var i = 0; i < launches.length; i++) if (launches[i] >= cutoff) kept.push(launches[i])
+  return kept
+}
+
+// Drop everything past the retention horizon, and drop apps left with nothing.
+// Returns `changed` so a periodic sweep only writes the file when the sweep
+// actually removed something.
+function pruneApps(apps, now) {
+  var out = {}
+  var changed = false
+  for (var key in apps) {
+    var record = sanitizeRecord(apps[key])
+    var kept = prunedLaunches(record.launches, now)
+    if (kept.length !== record.launches.length) changed = true
+    if (kept.length === 0) { changed = true; continue }
+    out[key] = {
+      launches: kept,
+      desktopId: record.desktopId,
+      name: record.name,
+      icon: record.icon
+    }
+  }
+  return { apps: out, changed: changed }
 }
 
 // Tolerant on purpose: a truncated or hand-edited usage.json costs the user
@@ -120,11 +183,14 @@ function lookup(apps, cls) {
   return key ? apps[key] : null
 }
 
-// One launch of `cls`. Returns a new apps object rather than mutating, so a
-// QML property assignment sees a change and re-evaluates its bindings.
-// `meta` carries whatever the caller managed to resolve about the app
-// (desktop id, display name, icon name); it is merged in but never used to
+// One launch of `cls`, at `nowSeconds`. Returns a new apps object rather than
+// mutating, so a QML property assignment sees a change and re-evaluates its
+// bindings. `meta` carries whatever the caller managed to resolve about the
+// app (desktop id, display name, icon name); it is merged in but never used to
 // erase a value we already had.
+//
+// Pruning happens here as well as on the sweep, so the file cannot grow
+// without bound between sweeps no matter how much the machine is used.
 function recordLaunch(apps, cls, nowSeconds, meta) {
   var name = normalizeClass(cls)
   var next = {}
@@ -134,11 +200,16 @@ function recordLaunch(apps, cls, nowSeconds, meta) {
   var existingKey = findKey(next, name) || name
   var record = sanitizeRecord(next[existingKey])
   var extra = meta && typeof meta === "object" ? meta : {}
-  var stamp = Number(nowSeconds)
+
+  var stamp = Math.floor(Number(nowSeconds))
+  if (!isFinite(stamp) || stamp <= 0) stamp = 0
+
+  var launches = record.launches.slice()
+  if (stamp > 0) launches.push(stamp)
+  launches.sort(function(a, b) { return a - b })
 
   next[existingKey] = {
-    count: record.count + 1,
-    last: isFinite(stamp) && stamp > 0 ? Math.floor(stamp) : record.last,
+    launches: prunedLaunches(launches, stamp > 0 ? stamp : lastLaunchOf(launches)),
     desktopId: String(extra.desktopId || record.desktopId || ""),
     name: String(extra.name || record.name || ""),
     icon: String(extra.icon || record.icon || "")
@@ -146,10 +217,12 @@ function recordLaunch(apps, cls, nowSeconds, meta) {
   return next
 }
 
-// Fold a store read off disk into counters already collected in memory. The
+// Fold a store read off disk into launches already collected in memory. The
 // service starts counting the moment the shell has a Hyprland connection,
-// which can be before the file has finished loading; adding the two is the
-// only merge that loses nothing.
+// which can be before the file has finished loading, so the two sets are
+// disjoint in time and concatenating them loses nothing. Identical timestamps
+// are kept, not deduplicated: two windows of one app really can open in the
+// same second, and that is two launches.
 function mergeApps(base, incoming) {
   var out = {}
   var key
@@ -162,9 +235,10 @@ function mergeApps(base, incoming) {
       continue
     }
     var current = out[target]
+    var launches = current.launches.concat(record.launches)
+    launches.sort(function(a, b) { return a - b })
     out[target] = {
-      count: current.count + record.count,
-      last: Math.max(current.last, record.last),
+      launches: launches,
       desktopId: current.desktopId || record.desktopId,
       name: current.name || record.name,
       icon: current.icon || record.icon
@@ -181,7 +255,7 @@ function clampSlots(value) {
   return Math.max(MIN_SLOTS, Math.min(MAX_SLOTS, n))
 }
 
-function entryFor(apps, cls, describe, pinned) {
+function entryFor(apps, cls, describe, pinned, now) {
   var record = sanitizeRecord(lookup(apps, cls))
   var described = null
   try {
@@ -192,8 +266,13 @@ function entryFor(apps, cls, describe, pinned) {
   var desktopId = String((described && described.desktopId) || record.desktopId || "")
   return {
     cls: normalizeClass(cls),
-    count: record.count,
-    last: record.last,
+    // `count` is the windowed count -- launches in the last three days -- and
+    // it is what the ranking, the hub readout and the tests all mean by it.
+    count: launchesWithin(record.launches, now),
+    // Ties break on the most recent launch. Any app with a non-zero windowed
+    // count has its last launch inside the window too, so this never lets a
+    // stale app win a tie against a current one.
+    last: lastLaunchOf(record.launches),
     desktopId: desktopId,
     name: String((described && described.name) || record.name || normalizeClass(cls)),
     icon: String((described && described.icon) || record.icon || ""),
@@ -219,11 +298,18 @@ function compareEntries(a, b) {
 // then the most-launched apps that are not pinned or ignored, ranked by
 // count and broken by recency. `describe(cls)` is the caller's window
 // class -> desktop entry lookup and may return null.
+//
+// `options.now` (epoch seconds) is the instant the window is measured from.
+// Callers pass it so the answer is a pure function of its inputs -- and so
+// that re-ranking on a timer, with nothing else changed, still drops apps
+// whose launches have aged out.
 function rankApps(apps, options) {
   var opts = options || {}
   var slots = clampSlots(opts.slots)
   var ignored = indexList(opts.ignored)
   var pinned = parseList(opts.pinned)
+  var now = Math.floor(Number(opts.now))
+  if (!isFinite(now) || now <= 0) now = Math.floor(Date.now() / 1000)
   var taken = {}
   var out = []
   var i
@@ -232,14 +318,16 @@ function rankApps(apps, options) {
     var key = classKey(pinned[i])
     if (taken[key] || ignored[key]) continue
     taken[key] = true
-    out.push(entryFor(apps, pinned[i], opts.describe, true))
+    out.push(entryFor(apps, pinned[i], opts.describe, true, now))
   }
 
   var auto = []
   for (var cls in apps) {
     var k = classKey(cls)
     if (!k || taken[k] || ignored[k]) continue
-    var entry = entryFor(apps, cls, opts.describe, false)
+    var entry = entryFor(apps, cls, opts.describe, false, now)
+    // A zero windowed count is the whole mechanism: nothing launched in the
+    // last three days has any claim on a slot.
     if (!entry.launchable || entry.count <= 0) continue
     auto.push(entry)
   }
@@ -311,8 +399,11 @@ function parseClients(raw) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     STORE_VERSION: STORE_VERSION, MAX_SLOTS: MAX_SLOTS, MIN_SLOTS: MIN_SLOTS,
+    WINDOW_SECONDS: WINDOW_SECONDS, RETENTION_SECONDS: RETENTION_SECONDS,
     normalizeClass: normalizeClass, classKey: classKey, parseList: parseList,
     emptyStore: emptyStore, parseStore: parseStore, serializeStore: serializeStore,
+    launchesWithin: launchesWithin, lastLaunchOf: lastLaunchOf,
+    prunedLaunches: prunedLaunches, pruneApps: pruneApps,
     findKey: findKey, recordLaunch: recordLaunch, mergeApps: mergeApps,
     clampSlots: clampSlots, rankApps: rankApps,
     angleFor: angleFor, pointOn: pointOn,

@@ -2,8 +2,8 @@
 
 An [Omarchy](https://omarchy.org/) shell plugin: an orbital launcher that
 surfaces the apps you actually use. Six icons on one turning ring, centred on
-the screen, ranked by how often you open them — not by a favourites list you
-have to maintain.
+the screen, ranked by how often you have opened them **in the last three
+days** — not by a favourites list you have to maintain.
 
 ![The Gravity orbit: six apps on a ring around a hub naming the app under the cursor](preview.png)
 
@@ -29,8 +29,12 @@ configure anything.
 
 ## Features
 
-- **Learned ranking.** The orbit is the top of your launch counts, live. A new
-  habit shows up in the ring within a few launches; an abandoned one falls out.
+- **A rolling three-day ranking.** The orbit is the top of what you have
+  launched in the last 72 hours. A new habit shows up within a few launches,
+  and an old one leaves on its own: launches stop counting once they age past
+  the window, so an app you hammered last week is gone without you doing
+  anything. What is on the ring is what you are using *now*, not a lifetime
+  scoreboard that the first month of use freezes in place.
 - **System-wide tracking.** Counts come from Hyprland's `openwindow` stream, so
   they reflect how you use the machine, not how you use this widget.
 - **Launch or focus.** Clicking an app focuses its window if one exists, and
@@ -200,9 +204,17 @@ are not things anyone launches. Pinning overrides that too.
 
 ## How the ranking works
 
-One counter per window class, incremented once per top-level window created.
-Ties break on which was launched most recently. Pinned apps are placed first,
-in configured order; the ranking fills the remaining slots.
+Every top-level window that opens appends a timestamp to its window class's
+list. An app's rank is **how many of those timestamps fall inside the last 72
+hours** — counted against the clock at the moment the ranking is computed, not
+at the moment something was launched. Ties break on the most recent launch.
+Pinned apps are placed first, in configured order; the ranking fills the
+remaining slots.
+
+Because the count is derived from the clock rather than stored, an app leaves
+the ring the moment its last qualifying launch ages out, with no new launch
+needed to trigger it. An open panel re-checks once a minute; a panel that is
+opened computes it fresh; `gravity-usage list` computes it when you ask.
 
 Focusing an existing window does **not** count — no window was created — so
 using Gravity to switch to an app you already have open never inflates its
@@ -220,11 +232,28 @@ JSON, written by the plugin's background service and safe to read, edit, or
 delete — a missing or corrupt file costs you the ranking, and using the machine
 rebuilds it.
 
+One list of launch times per window class. Timestamps are kept for four days
+and count for three: the extra day is slack for a clock that steps backwards
+(an NTP correction, a confused RTC after a reboot) so a small negative jump
+cannot erase history that is still inside the window. Anything older is
+dropped when the app is next launched, on a ten-minute sweep, and once when the
+store loads — so the file stays a few KB however long the machine runs.
+
+A store written by an older version (`"version": 1`, one integer per app) loads
+without complaint and starts its window empty: a lifetime total cannot be
+spread back over three days it never described, and a few days of use rebuilds
+a truthful ranking.
+
 ```json
 {
   "version": 1,
   "apps": {
-    "v2rayN": { "count": 37, "last": 1788618278, "desktopId": "v2rayn", "name": "v2rayN", "icon": "v2rayn" }
+    "v2rayN": {
+      "launches": [1788618278, 1788640912, 1788702233],
+      "desktopId": "v2rayn",
+      "name": "v2rayN",
+      "icon": "v2rayn"
+    }
   }
 }
 ```
@@ -232,7 +261,7 @@ rebuilds it.
 A maintenance IPC target sits on top of it:
 
 ```bash
-omarchy-shell gravity-usage list             # the ranking, most launched first
+omarchy-shell gravity-usage list             # the ranking now, with what has aged out
 omarchy-shell gravity-usage forget chromium  # drop one app
 omarchy-shell gravity-usage reset            # start over
 omarchy-shell gravity-usage record v2rayN    # count a launch by hand
@@ -251,9 +280,9 @@ accumulate.
 | `Panel.qml` | the orbit: a full-screen layer-shell surface, centred |
 | `Service.qml` | the Hyprland event listener and the only writer of the store |
 | `OrbitGlyph.qml` | the turning mark, shared by the bar icon and the panel's hub |
-| `Orbit.js` | the store format, the ranking, the geometry, the output parsing |
+| `Orbit.js` | the store format, the rolling window, the ranking, the geometry, the output parsing |
 
-The counter lives in a `service` plugin rather than in the bar widget on
+The counting lives in a `service` plugin rather than in the bar widget on
 purpose: the shell mounts a service once per session, while a bar widget exists
 once per monitor. Counting in the widget would double every launch on a
 two-screen setup. One writer, any number of readers — the panel watches the

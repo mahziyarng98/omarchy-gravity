@@ -84,13 +84,21 @@ Panel {
     }
   }
 
+  // Bumped on a timer while the panel is open. The ranking is a function of
+  // the clock as much as of the store -- an app drops out when its launches
+  // age past three days, with nothing else happening -- so the binding needs
+  // a reason to re-run even when no launch and no desktop entry has changed.
+  property int windowRevision: 0
+
   readonly property var apps: {
-    root.usageRevision      // reactive dependencies: the store and the
-    root.entriesRevision    // desktop-entry index both feed this
+    root.usageRevision      // reactive dependencies: the store, the
+    root.entriesRevision    // desktop-entry index, and the passage of time
+    root.windowRevision
     return Orbit.rankApps(root.usageApps, {
       pinned: root.pinnedClasses,
       ignored: root.ignoredClasses,
       slots: root.slotCount,
+      now: Math.floor(Date.now() / 1000),
       describe: function(cls) { return root.describeClass(cls) }
     })
   }
@@ -294,6 +302,18 @@ Panel {
   Connections {
     target: DesktopEntries.applications
     function onValuesChanged() { root.entriesRevision++ }
+  }
+
+  // Only while the panel is on screen: a closed panel has no ranking to keep
+  // honest, and it recomputes from scratch the moment it opens. A minute is
+  // far finer than a three-day window needs -- it costs one binding
+  // re-evaluation over six apps -- and it means an app ageing out while you
+  // sit looking at the ring actually leaves it.
+  Timer {
+    running: root.opened
+    interval: 60000
+    repeat: true
+    onTriggered: root.windowRevision++
   }
 
   // The one long-running animation: the ring's own rotation. It pauses rather
@@ -543,12 +563,15 @@ Panel {
               width: parent.width
               horizontalAlignment: Text.AlignHCenter
               elide: Text.ElideRight
+              // "in 3d" is not decoration: without it the small numbers a
+              // rolling window produces read as a suspiciously low lifetime
+              // total rather than as recent use.
               text: {
                 if (!root.selectedApp) return ""
                 var app = root.selectedApp
-                var launches = app.count === 1 ? "1 launch" : app.count + " launches"
-                if (app.pinned) return app.count > 0 ? "Pinned · " + launches : "Pinned"
-                return launches
+                if (app.count <= 0) return app.pinned ? "Pinned" : "Not used lately"
+                var launches = (app.count === 1 ? "1 launch" : app.count + " launches") + " in 3d"
+                return app.pinned ? "Pinned · " + launches : launches
               }
               color: root.muted
               font.family: root.contentFontFamily

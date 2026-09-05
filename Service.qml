@@ -62,6 +62,28 @@ Item {
     }
   }
 
+  function ageText(seconds) {
+    var n = Math.max(0, Math.floor(Number(seconds) || 0))
+    if (n < 90) return n + "s ago"
+    if (n < 5400) return Math.round(n / 60) + "m ago"
+    if (n < 172800) return Math.round(n / 3600) + "h ago"
+    return (n / 86400).toFixed(1) + "d ago"
+  }
+
+  // Sweep the retention horizon on a timer as well as on every write. Nothing
+  // needs to happen for launches to age out of the *ranking* -- that is
+  // computed from the timestamps against the clock, so it is always current --
+  // but the file should not carry a week-old launch around forever, and
+  // rewriting it when the sweep bites is also what nudges every open panel's
+  // file watcher into re-reading.
+  function sweep() {
+    if (!root.storeLoaded) return
+    var swept = Orbit.pruneApps(root.apps, root.nowSeconds())
+    if (!swept.changed) return
+    root.apps = swept.apps
+    writeDebounce.restart()
+  }
+
   function recordClass(cls) {
     var name = Orbit.normalizeClass(cls)
     if (!name) return
@@ -77,6 +99,10 @@ Item {
     if (root.storeLoaded) return
     root.apps = Orbit.mergeApps(Orbit.parseStore(raw).apps, root.apps)
     root.storeLoaded = true
+    // A machine that was off for a week comes back with a store full of
+    // launches that expired while it slept. Sweep once on load rather than
+    // waiting up to ten minutes for the timer to notice.
+    root.sweep()
     if (root.writePending) writeDebounce.restart()
   }
 
@@ -101,14 +127,34 @@ Item {
   IpcHandler {
     target: "gravity-usage"
 
-    // Print the ranking exactly as the store has it, most-launched first.
+    // The ranking as it stands right now: launches inside the three-day
+    // window, most first. The parenthetical is what is still on disk but no
+    // longer counting, which is what makes an app ageing out visible instead
+    // of just silently vanishing from the ring.
     function list(): string {
-      var lines = []
+      var now = root.nowSeconds()
       var entries = []
-      for (var cls in root.apps) entries.push({ cls: cls, record: root.apps[cls] })
-      entries.sort(function(a, b) { return b.record.count - a.record.count })
-      for (var i = 0; i < entries.length; i++)
-        lines.push(entries[i].record.count + "\t" + entries[i].cls)
+      for (var cls in root.apps) {
+        var record = root.apps[cls]
+        var kept = record.launches ? record.launches.length : 0
+        entries.push({
+          cls: cls,
+          counted: Orbit.launchesWithin(record.launches || [], now),
+          kept: kept,
+          last: Orbit.lastLaunchOf(record.launches || [])
+        })
+      }
+      entries.sort(function(a, b) {
+        if (b.counted !== a.counted) return b.counted - a.counted
+        return b.last - a.last
+      })
+      var lines = []
+      for (var i = 0; i < entries.length; i++) {
+        var e = entries[i]
+        var aged = e.kept - e.counted
+        lines.push(e.counted + "\t" + e.cls
+          + "\t(last " + root.ageText(now - e.last) + (aged > 0 ? ", " + aged + " aged out" : "") + ")")
+      }
       return lines.length ? lines.join("\n") : "no launches recorded yet"
     }
 
@@ -157,10 +203,22 @@ Item {
 
   // Bursts are common -- a session restore opens a dozen windows at once --
   // so counting is immediate but the file is written once the burst settles.
+  // Kept short: everything between the last launch and this firing is what a
+  // sudden shutdown would cost, and the file is small enough that writing it
+  // more often is free.
   Timer {
     id: writeDebounce
-    interval: 1500
+    interval: 400
     onTriggered: root.writeStore()
+  }
+
+  Timer {
+    id: sweepTimer
+    interval: 10 * 60 * 1000
+    running: true
+    repeat: true
+    triggeredOnStart: false
+    onTriggered: root.sweep()
   }
 
   Process {
@@ -174,15 +232,29 @@ Item {
 
   // watchChanges stays off: this is the only writer, and re-reading our own
   // atomic write would race the next increment against the file.
+  //
+  // blockWrites makes setText return only once the bytes are down, so a
+  // launch recorded before a shutdown is on disk rather than queued behind an
+  // event loop that is about to stop. The file is a few KB; the cost is
+  // nothing next to losing the day's history.
   FileView {
     id: usageFile
     path: root.usagePath
     watchChanges: false
     atomicWrites: true
+    blockWrites: true
     printErrors: false
     onLoaded: root.adoptStore(usageFile.text())
     onLoadFailed: root.adoptStore("")
   }
 
   Component.onCompleted: mkdirProcess.running = true
+
+  // A clean shutdown (logout, omarchy-restart-shell, a plugin reload) tears
+  // this object down while a debounced write may still be pending. Flush it.
+  Component.onDestruction: {
+    if (!writeDebounce.running) return
+    writeDebounce.stop()
+    root.writeStore()
+  }
 }
