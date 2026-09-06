@@ -105,6 +105,23 @@ omarchy bar move io.github.mahziyarng98.gravity --section right
 omarchy plugin update io.github.mahziyarng98.gravity
 ```
 
+## Uninstall
+
+```bash
+omarchy plugin remove io.github.mahziyarng98.gravity
+```
+
+That takes the widget out of the bar and unloads the background service. The
+usage store is deliberately left behind, so reinstalling picks the ranking back
+up where it left off. To remove it too:
+
+```bash
+rm -rf ~/.local/state/omarchy/gravity
+```
+
+Nothing else on the system is touched: Gravity writes only inside that one
+directory and never edits your Hyprland or Omarchy configuration.
+
 ## Usage
 
 Click the turning mark in the bar, or press the shortcut. The panel opens
