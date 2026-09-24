@@ -195,39 +195,28 @@ Panel {
 
   // ---- Panel lifecycle ----------------------------------------------------
 
-  // Exclusive focus is primed just long enough to grab the keyboard the
-  // instant the panel maps, then dropped to OnDemand -- the same scheme
-  // qs.Ui.KeyboardPanel uses for every first-party popup. Holding Exclusive
-  // for the panel's whole open duration (what this used to do) makes
-  // Hyprland route every pointer event on every output to this one surface
-  // until it releases focus, so a click that does not land where this panel
-  // expects -- another monitor, a moment where a binding is still catching
-  // up -- has nowhere to go. Nothing closes it, Esc does not either because
-  // the surface never got the chance to hand focus back, and the only way
-  // out is killing the session. Priming keeps the keybinding-summon behaviour
-  // (no coin flip on whether the pointer happens to be over the panel) while
-  // giving every click, on any output, somewhere to land.
-  property bool focusPrimed: false
-
-  function beginFocusPrime() {
-    if (root.opened && overlay.backingWindowVisible) focusPrimeTimer.restart()
-  }
-
-  Timer {
-    id: focusPrimeTimer
-    interval: 75
-    onTriggered: if (root.opened) root.focusPrimed = true
-  }
-
-  onOpenedChanged: {
-    if (root.opened) {
-      root.focusPrimed = false
-      root.beginFocusPrime()
-    } else {
-      focusPrimeTimer.stop()
-      root.focusPrimed = false
-    }
-  }
+  // Keyboard focus is OnDemand only -- never Exclusive, not even briefly.
+  //
+  // This plugin used to hold Exclusive for the panel's whole open duration,
+  // then (in an earlier attempt at this same bug) tried priming Exclusive
+  // for 75ms before dropping to OnDemand, matching qs.Ui.KeyboardPanel's
+  // scheme. Both still requested Exclusive, and both were verified (on this
+  // machine, Hyprland 0.56.2, two outputs) to sometimes leave the compositor
+  // never delivering another frame callback to this surface: the panel's own
+  // `close()` still flips `opened` to false internally, but nothing ever
+  // repaints, so the ring is stuck on screen -- unresponsive to Esc, to
+  // clicks, and even to a fresh close() called straight over IPC -- until
+  // the whole shell (or session) is restarted. The "apps not opening"
+  // symptom is the same freeze: a click still reaches the app underneath,
+  // it just can't be seen through the wedged layer sitting on top of it.
+  //
+  // OnDemand never asks the compositor to hand this surface every output's
+  // pointer/keyboard, so it cannot wedge the same way. The cost is the
+  // "coin flip" the priming was trying to avoid: a keybinding summon that
+  // lands while a previous close is still fading out (window already mapped)
+  // won't grab the keyboard until the pointer enters the panel or a click
+  // lands on it. That is a minor inconvenience. A compositor-level hang that
+  // requires logging out is not a trade worth making to avoid it.
 
   function open() {
     usageFile.reload()
@@ -257,9 +246,19 @@ Panel {
     else root.open()
   }
 
+  // `centerHoverRevealSuppressed` on the plugin-facing bar API is a
+  // read-only mirror of the host's real property; the API only exposes a
+  // setter as the `setCenterHoverRevealSuppressed(value)` method (see
+  // PluginBarApi.qml). Assigning the property directly throws a TypeError
+  // -- and since this used to run as the first statement of close(), that
+  // throw aborted the rest of close() every time, so `root.controller.hide()`
+  // never ran and the panel could never actually close: not on Esc, not on
+  // a scrim click, not over IPC. activate() has the same shape (it calls
+  // close() before launching), which is why apps looked like they weren't
+  // opening -- the launch call after close() never ran either.
   function setCenterHoverRevealSuppressed(value) {
-    if (root.bar && "centerHoverRevealSuppressed" in root.bar)
-      root.bar.centerHoverRevealSuppressed = value
+    if (root.bar && typeof root.bar.setCenterHoverRevealSuppressed === "function")
+      root.bar.setCenterHoverRevealSuppressed(value)
   }
 
   function grabFocus() {
@@ -410,19 +409,14 @@ Panel {
 
     WlrLayershell.namespace: "omarchy-gravity"
     WlrLayershell.layer: WlrLayer.Overlay
-    // Prime with Exclusive on every open, then settle on OnDemand -- see
-    // focusPrimed above. Once focus has been granted, dropping to OnDemand
-    // does not give it up, so Esc and every other key this panel wants still
-    // reach it; the change is only that Hyprland stops routing every other
-    // output's pointer traffic here for the rest of the time the panel is
-    // open.
+    // OnDemand only -- see the note above root.open(). Never Exclusive, so
+    // Hyprland never routes every other output's pointer traffic here, and
+    // never stops repainting this surface.
     //
     // Focus follows `opened`, never `visible`, so the keyboard is released
     // the moment the panel is logically closed rather than at the end of the
     // closing animation.
-    WlrLayershell.keyboardFocus: root.opened
-      ? (root.focusPrimed ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.Exclusive)
-      : WlrKeyboardFocus.None
+    WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
 
     anchors {
       top: true
@@ -431,11 +425,11 @@ Panel {
       right: true
     }
 
-    // Layer-shell hands the surface the keyboard, but Qt still needs an
-    // active-focus target inside it before Keys handlers fire, and the item
-    // tree is not laid out until the window maps.
+    // Layer-shell hands the surface the keyboard on map (OnDemand) or on
+    // pointer entry, but Qt still needs an active-focus target inside it
+    // before Keys handlers fire, and the item tree is not laid out until the
+    // window maps.
     onBackingWindowVisibleChanged: {
-      root.beginFocusPrime()
       if (backingWindowVisible && root.opened) Qt.callLater(root.grabFocus)
     }
 
@@ -467,12 +461,10 @@ Panel {
       onClicked: root.close()
     }
 
-    // This surface only covers the anchor's own output, but the brief
-    // Exclusive prime above still means Hyprland can hand a click on another
-    // output to this surface with translated coordinates rather than to
-    // whatever the user actually meant to click. Give every other screen a
-    // transparent catcher for exactly that window, so the click closes the
-    // ring instead of vanishing into a surface with nothing under it.
+    // This surface only covers the anchor's own output, so a click on any
+    // other monitor would otherwise just reach whatever is under it there.
+    // The ring is modal across the whole session while open, so give every
+    // other screen a transparent catcher too: a click anywhere dismisses it.
     // Matches qs.Ui.KeyboardPanel's dismiss twins.
     Variants {
       model: root.opened ? Quickshell.screens : []
