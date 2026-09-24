@@ -195,6 +195,40 @@ Panel {
 
   // ---- Panel lifecycle ----------------------------------------------------
 
+  // Exclusive focus is primed just long enough to grab the keyboard the
+  // instant the panel maps, then dropped to OnDemand -- the same scheme
+  // qs.Ui.KeyboardPanel uses for every first-party popup. Holding Exclusive
+  // for the panel's whole open duration (what this used to do) makes
+  // Hyprland route every pointer event on every output to this one surface
+  // until it releases focus, so a click that does not land where this panel
+  // expects -- another monitor, a moment where a binding is still catching
+  // up -- has nowhere to go. Nothing closes it, Esc does not either because
+  // the surface never got the chance to hand focus back, and the only way
+  // out is killing the session. Priming keeps the keybinding-summon behaviour
+  // (no coin flip on whether the pointer happens to be over the panel) while
+  // giving every click, on any output, somewhere to land.
+  property bool focusPrimed: false
+
+  function beginFocusPrime() {
+    if (root.opened && overlay.backingWindowVisible) focusPrimeTimer.restart()
+  }
+
+  Timer {
+    id: focusPrimeTimer
+    interval: 75
+    onTriggered: if (root.opened) root.focusPrimed = true
+  }
+
+  onOpenedChanged: {
+    if (root.opened) {
+      root.focusPrimed = false
+      root.beginFocusPrime()
+    } else {
+      focusPrimeTimer.stop()
+      root.focusPrimed = false
+    }
+  }
+
   function open() {
     usageFile.reload()
     if (root.appLibrary && typeof root.appLibrary.refreshIcons === "function") root.appLibrary.refreshIcons()
@@ -376,19 +410,19 @@ Panel {
 
     WlrLayershell.namespace: "omarchy-gravity"
     WlrLayershell.layer: WlrLayer.Overlay
-    // Exclusive for as long as the panel is open, like the first-party
-    // fullscreen overlays. The bar's popup panels prime Exclusive and then
-    // settle on OnDemand so clicks can still reach other monitors, but
-    // OnDemand only takes focus on map or on pointer entry -- which is a
-    // coin flip for a panel summoned by a keybinding, with the pointer left
-    // wherever the user last put it. A modal that swallows the keyboard is
-    // the right trade here: every key it takes is one it has an answer for,
-    // and Esc gives it back.
+    // Prime with Exclusive on every open, then settle on OnDemand -- see
+    // focusPrimed above. Once focus has been granted, dropping to OnDemand
+    // does not give it up, so Esc and every other key this panel wants still
+    // reach it; the change is only that Hyprland stops routing every other
+    // output's pointer traffic here for the rest of the time the panel is
+    // open.
     //
     // Focus follows `opened`, never `visible`, so the keyboard is released
     // the moment the panel is logically closed rather than at the end of the
     // closing animation.
-    WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+    WlrLayershell.keyboardFocus: root.opened
+      ? (root.focusPrimed ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.Exclusive)
+      : WlrKeyboardFocus.None
 
     anchors {
       top: true
@@ -400,7 +434,10 @@ Panel {
     // Layer-shell hands the surface the keyboard, but Qt still needs an
     // active-focus target inside it before Keys handlers fire, and the item
     // tree is not laid out until the window maps.
-    onBackingWindowVisibleChanged: if (backingWindowVisible && root.opened) Qt.callLater(root.grabFocus)
+    onBackingWindowVisibleChanged: {
+      root.beginFocusPrime()
+      if (backingWindowVisible && root.opened) Qt.callLater(root.grabFocus)
+    }
 
     Rectangle {
       id: scrim
@@ -428,6 +465,45 @@ Panel {
       enabled: root.opened
       acceptedButtons: Qt.AllButtons
       onClicked: root.close()
+    }
+
+    // This surface only covers the anchor's own output, but the brief
+    // Exclusive prime above still means Hyprland can hand a click on another
+    // output to this surface with translated coordinates rather than to
+    // whatever the user actually meant to click. Give every other screen a
+    // transparent catcher for exactly that window, so the click closes the
+    // ring instead of vanishing into a surface with nothing under it.
+    // Matches qs.Ui.KeyboardPanel's dismiss twins.
+    Variants {
+      model: root.opened ? Quickshell.screens : []
+
+      delegate: Component {
+        PanelWindow {
+          required property var modelData
+
+          screen: modelData
+          visible: root.opened && !!overlay.screen && modelData.name !== overlay.screen.name
+          color: "transparent"
+          exclusionMode: ExclusionMode.Ignore
+
+          WlrLayershell.namespace: "omarchy-gravity-dismiss"
+          WlrLayershell.layer: WlrLayer.Overlay
+          WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+
+          anchors {
+            top: true
+            bottom: true
+            left: true
+            right: true
+          }
+
+          MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.AllButtons
+            onPressed: root.close()
+          }
+        }
+      }
     }
 
     PanelKeyCatcher {
