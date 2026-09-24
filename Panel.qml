@@ -195,6 +195,29 @@ Panel {
 
   // ---- Panel lifecycle ----------------------------------------------------
 
+  // Keyboard focus is OnDemand only -- never Exclusive, not even briefly.
+  //
+  // This plugin used to hold Exclusive for the panel's whole open duration,
+  // then (in an earlier attempt at this same bug) tried priming Exclusive
+  // for 75ms before dropping to OnDemand, matching qs.Ui.KeyboardPanel's
+  // scheme. Both still requested Exclusive, and both were verified (on this
+  // machine, Hyprland 0.56.2, two outputs) to sometimes leave the compositor
+  // never delivering another frame callback to this surface: the panel's own
+  // `close()` still flips `opened` to false internally, but nothing ever
+  // repaints, so the ring is stuck on screen -- unresponsive to Esc, to
+  // clicks, and even to a fresh close() called straight over IPC -- until
+  // the whole shell (or session) is restarted. The "apps not opening"
+  // symptom is the same freeze: a click still reaches the app underneath,
+  // it just can't be seen through the wedged layer sitting on top of it.
+  //
+  // OnDemand never asks the compositor to hand this surface every output's
+  // pointer/keyboard, so it cannot wedge the same way. The cost is the
+  // "coin flip" the priming was trying to avoid: a keybinding summon that
+  // lands while a previous close is still fading out (window already mapped)
+  // won't grab the keyboard until the pointer enters the panel or a click
+  // lands on it. That is a minor inconvenience. A compositor-level hang that
+  // requires logging out is not a trade worth making to avoid it.
+
   function open() {
     usageFile.reload()
     if (root.appLibrary && typeof root.appLibrary.refreshIcons === "function") root.appLibrary.refreshIcons()
@@ -223,9 +246,19 @@ Panel {
     else root.open()
   }
 
+  // `centerHoverRevealSuppressed` on the plugin-facing bar API is a
+  // read-only mirror of the host's real property; the API only exposes a
+  // setter as the `setCenterHoverRevealSuppressed(value)` method (see
+  // PluginBarApi.qml). Assigning the property directly throws a TypeError
+  // -- and since this used to run as the first statement of close(), that
+  // throw aborted the rest of close() every time, so `root.controller.hide()`
+  // never ran and the panel could never actually close: not on Esc, not on
+  // a scrim click, not over IPC. activate() has the same shape (it calls
+  // close() before launching), which is why apps looked like they weren't
+  // opening -- the launch call after close() never ran either.
   function setCenterHoverRevealSuppressed(value) {
-    if (root.bar && "centerHoverRevealSuppressed" in root.bar)
-      root.bar.centerHoverRevealSuppressed = value
+    if (root.bar && typeof root.bar.setCenterHoverRevealSuppressed === "function")
+      root.bar.setCenterHoverRevealSuppressed(value)
   }
 
   function grabFocus() {
@@ -376,19 +409,14 @@ Panel {
 
     WlrLayershell.namespace: "omarchy-gravity"
     WlrLayershell.layer: WlrLayer.Overlay
-    // Exclusive for as long as the panel is open, like the first-party
-    // fullscreen overlays. The bar's popup panels prime Exclusive and then
-    // settle on OnDemand so clicks can still reach other monitors, but
-    // OnDemand only takes focus on map or on pointer entry -- which is a
-    // coin flip for a panel summoned by a keybinding, with the pointer left
-    // wherever the user last put it. A modal that swallows the keyboard is
-    // the right trade here: every key it takes is one it has an answer for,
-    // and Esc gives it back.
+    // OnDemand only -- see the note above root.open(). Never Exclusive, so
+    // Hyprland never routes every other output's pointer traffic here, and
+    // never stops repainting this surface.
     //
     // Focus follows `opened`, never `visible`, so the keyboard is released
     // the moment the panel is logically closed rather than at the end of the
     // closing animation.
-    WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+    WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
 
     anchors {
       top: true
@@ -397,10 +425,13 @@ Panel {
       right: true
     }
 
-    // Layer-shell hands the surface the keyboard, but Qt still needs an
-    // active-focus target inside it before Keys handlers fire, and the item
-    // tree is not laid out until the window maps.
-    onBackingWindowVisibleChanged: if (backingWindowVisible && root.opened) Qt.callLater(root.grabFocus)
+    // Layer-shell hands the surface the keyboard on map (OnDemand) or on
+    // pointer entry, but Qt still needs an active-focus target inside it
+    // before Keys handlers fire, and the item tree is not laid out until the
+    // window maps.
+    onBackingWindowVisibleChanged: {
+      if (backingWindowVisible && root.opened) Qt.callLater(root.grabFocus)
+    }
 
     Rectangle {
       id: scrim
@@ -428,6 +459,43 @@ Panel {
       enabled: root.opened
       acceptedButtons: Qt.AllButtons
       onClicked: root.close()
+    }
+
+    // This surface only covers the anchor's own output, so a click on any
+    // other monitor would otherwise just reach whatever is under it there.
+    // The ring is modal across the whole session while open, so give every
+    // other screen a transparent catcher too: a click anywhere dismisses it.
+    // Matches qs.Ui.KeyboardPanel's dismiss twins.
+    Variants {
+      model: root.opened ? Quickshell.screens : []
+
+      delegate: Component {
+        PanelWindow {
+          required property var modelData
+
+          screen: modelData
+          visible: root.opened && !!overlay.screen && modelData.name !== overlay.screen.name
+          color: "transparent"
+          exclusionMode: ExclusionMode.Ignore
+
+          WlrLayershell.namespace: "omarchy-gravity-dismiss"
+          WlrLayershell.layer: WlrLayer.Overlay
+          WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+
+          anchors {
+            top: true
+            bottom: true
+            left: true
+            right: true
+          }
+
+          MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.AllButtons
+            onPressed: root.close()
+          }
+        }
+      }
     }
 
     PanelKeyCatcher {
