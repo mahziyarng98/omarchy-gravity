@@ -129,6 +129,28 @@ Panel {
     return map
   }
 
+  // StartupWMClass -> icon name, rebuilt with the entry index. A window class
+  // that heuristicLookup could not tie to a usable icon is often declared as
+  // the StartupWMClass of the entry that does carry it, so this is the bridge
+  // that keeps a real ranked app on a real icon instead of a fallback tile.
+  readonly property var startupIconIndex: {
+    root.entriesRevision
+    var map = ({})
+    var values = DesktopEntries.applications.values || []
+    for (var i = 0; i < values.length; i++) {
+      var entry = values[i]
+      if (!entry) continue
+      var wm = String(entry.startupClass || "").trim()
+      var icon = String(entry.icon || "").trim()
+      if (wm && icon) map[Orbit.classKey(wm)] = icon
+    }
+    return map
+  }
+
+  function startupIcon(cls) {
+    return root.startupIconIndex[Orbit.classKey(cls)] || ""
+  }
+
   // Null means the app is gone since it was rolled, and the ring should fall
   // through to the next candidate rather than draw a dead slot.
   function describeSuggestion(id) {
@@ -145,13 +167,39 @@ Panel {
     }
   }
 
+  // Resolve one icon *name* (or absolute path / URL) to something the Image
+  // can draw, or "" when this specific name is not available. Returning "" for
+  // a failed name is what lets the caller walk the next candidate instead of
+  // settling for a generic icon the moment the first guess misses.
+  function iconCandidateUrl(name) {
+    var value = String(name || "")
+    if (!value) return ""
+    if (value.indexOf("file://") === 0 || value.indexOf("image://") === 0) return value
+    if (value.charAt(0) === "/") return Util.fileUrl(value)
+    var themed = Quickshell.iconPath(value, true)
+    return themed.length > 0 ? themed : ""
+  }
+
+  // The resolution chain, most specific first: the desktop entry's icon, the
+  // lowercased window class, the icon of any entry declaring that class as its
+  // StartupWMClass, then the desktop id. Each is probed individually so a miss
+  // on one still reaches the others. The generic executable icon is the last
+  // icon before the caller's letter tile -- and if even that cannot resolve
+  // (as under a broken/absent icon theme) the tile carries the slot, so a chip
+  // is never a blank black square.
   function iconUrl(app) {
-    var name = String((app && app.icon) || "")
-    if (root.appLibrary && typeof root.appLibrary.iconSource === "function") return root.appLibrary.iconSource(name)
-    if (!name) return Quickshell.iconPath("application-x-executable", true)
-    if (name.charAt(0) === "/") return Util.fileUrl(name)
-    var themed = Quickshell.iconPath(name, true)
-    return themed.length > 0 ? themed : Quickshell.iconPath("application-x-executable", true)
+    var candidates = Orbit.iconCandidates(app, {
+      startupIcon: function(cls) { return root.startupIcon(cls) }
+    })
+    for (var i = 0; i < candidates.length; i++) {
+      var url = root.iconCandidateUrl(candidates[i])
+      if (url) return url
+    }
+    return root.iconCandidateUrl("application-x-executable")
+  }
+
+  function iconLetter(app) {
+    return Orbit.iconLetter(app)
   }
 
   // ---- Colour roles. Nothing here is a hex: every value is the live Omarchy
@@ -788,7 +836,12 @@ Panel {
                 }
               }
 
+              // The resolved icon. Its source is the end of the chain in
+              // iconUrl(); when that returns "" (no candidate and not even the
+              // generic icon resolved) or the image itself fails to decode, the
+              // letter tile below takes the slot -- never a blank square.
               Image {
+                id: chipIcon
                 anchors.centerIn: parent
                 width: root.iconSize
                 height: root.iconSize
@@ -799,6 +852,23 @@ Panel {
                 asynchronous: true
                 smooth: true
                 mipmap: true
+                visible: status === Image.Ready
+              }
+
+              // Last resort: the app's first letter on the accent ink. This is
+              // what guarantees a slot always reads as *something* -- under a
+              // broken or absent icon theme even the generic executable icon
+              // can fail to resolve, and a dark rounded square with nothing in
+              // it tells the user nothing about which app it launches.
+              Text {
+                anchors.centerIn: parent
+                visible: chipIcon.status !== Image.Ready
+                text: root.iconLetter(sat.modelData)
+                textFormat: Text.PlainText
+                color: root.accentInk
+                font.family: root.contentFontFamily
+                font.pixelSize: Math.round(root.iconSize * 0.5)
+                font.bold: true
               }
 
               // Pinned apps say so on the chip, not only in the hub: it is

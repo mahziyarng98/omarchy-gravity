@@ -75,6 +75,62 @@ function indexList(values) {
   return index
 }
 
+// --------------------------------------------------------------- the icons
+
+// The ordered list of icon names (or absolute paths) worth trying for an app,
+// most specific first. Pure: the caller resolves each candidate through its
+// icon theme / desktop-entry index and takes the first that lands, then falls
+// back to a letter tile when none do -- a slot must never draw blank.
+//
+// `options.startupIcon(cls)` is an optional callback returning the icon of a
+// desktop entry whose StartupWMClass matches `cls`. That is what lets a window
+// whose own entry carried no usable icon still find one through the entry that
+// actually declares it.
+function iconCandidates(app, options) {
+  var entry = app && typeof app === "object" ? app : {}
+  var opts = options || {}
+  var out = []
+  var seen = {}
+  function add(value) {
+    var v = String(value === undefined || value === null ? "" : value).trim()
+    if (!v) return
+    // Absolute paths and URLs are compared whole; names fold case so
+    // "v2rayN" and "v2rayn" are one candidate, not two shots at nothing.
+    var key = (v.charAt(0) === "/" || v.indexOf("://") >= 0) ? v : v.toLowerCase()
+    if (seen[key]) return
+    seen[key] = true
+    out.push(v)
+  }
+
+  // 1. The desktop entry's own icon, whether a themed name or a path.
+  add(entry.icon)
+  // 2. The window class, lowercased. Chromium/Electron apps and Wine games
+  //    usually ship an icon named exactly after the class.
+  add(classKey(entry.cls))
+  // 3. A desktop entry that declares this class as its StartupWMClass may
+  //    carry the real icon even when the entry the window matched did not.
+  if (typeof opts.startupIcon === "function") {
+    try { add(opts.startupIcon(entry.cls)) } catch (e) {}
+  }
+  // 4. The desktop id, which for reverse-DNS ids doubles as the icon name.
+  add(entry.desktopId)
+  add(classKey(entry.desktopId))
+  return out
+}
+
+// The single character drawn on a chip when no icon resolves: the first
+// letter of the display name, else of the window class, else of the desktop
+// id. Uppercased so it reads as an avatar rather than a stray fragment.
+function iconLetter(app) {
+  var entry = app && typeof app === "object" ? app : {}
+  var source = String(entry.name || entry.cls || entry.desktopId || "").trim()
+  for (var i = 0; i < source.length; i++) {
+    var ch = source.charAt(i)
+    if (/[a-zA-Z]/.test(ch)) return ch.toUpperCase()
+  }
+  return source ? source.charAt(0).toUpperCase() : "#"
+}
+
 // ------------------------------------------------------------- the store
 
 function emptyStore() {
@@ -486,6 +542,7 @@ if (typeof module !== "undefined" && module.exports) {
     WINDOW_SECONDS: WINDOW_SECONDS, RETENTION_SECONDS: RETENTION_SECONDS,
     SUGGESTION_POOL: SUGGESTION_POOL, sanitizeSuggestions: sanitizeSuggestions,
     normalizeClass: normalizeClass, classKey: classKey, parseList: parseList,
+    iconCandidates: iconCandidates, iconLetter: iconLetter,
     emptyStore: emptyStore, parseStore: parseStore, serializeStore: serializeStore,
     launchesWithin: launchesWithin, lastLaunchOf: lastLaunchOf,
     prunedLaunches: prunedLaunches, pruneApps: pruneApps,

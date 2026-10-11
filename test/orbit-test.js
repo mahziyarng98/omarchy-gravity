@@ -305,5 +305,48 @@ check("empty client list", O.pickWindowAddress([], "kitty"), "")
 check("bad hyprctl output", O.pickWindowAddress(O.parseClients("not json"), "kitty"), "")
 check("clients parse", O.parseClients('[{"address":"0x1"}]').length, 1)
 
+console.log("Icon resolution")
+// The chain, most specific first: entry icon, lowercased window class, the
+// StartupWMClass-matched entry's icon, then the desktop id. Deduped and
+// case-folded so one app never burns two shots on the same name.
+check("entry icon leads, then the StartupWMClass hit; class dedupes onto the icon",
+  O.iconCandidates({ icon: "firefox", cls: "Firefox", desktopId: "firefox" },
+    { startupIcon: function() { return "firefox-esr" } }),
+  ["firefox", "firefox-esr"])
+check("an app with no icon falls back to its window class, then desktop id",
+  O.iconCandidates({ icon: "", cls: "warp-taskbar", desktopId: "com.cloudflare.WarpTaskbar" }),
+  ["warp-taskbar", "com.cloudflare.WarpTaskbar"])
+check("the StartupWMClass callback is consulted and its answer included",
+  O.iconCandidates({ icon: "", cls: "somegame", desktopId: "" },
+    { startupIcon: function(cls) { return cls === "somegame" ? "steam_icon_12345" : "" } }),
+  ["somegame", "steam_icon_12345"])
+check("a throwing StartupWMClass callback still yields the other candidates",
+  O.iconCandidates({ icon: "a", cls: "b", desktopId: "" },
+    { startupIcon: function() { throw new Error("boom") } }),
+  ["a", "b"])
+check("case-insensitive dedup keeps one candidate however it was spelled",
+  O.iconCandidates({ icon: "Steam", cls: "steam", desktopId: "STEAM" }),
+  ["Steam"])
+check("an absolute-path icon is kept whole and is its own candidate",
+  O.iconCandidates({ icon: "/opt/app/icon.png", cls: "app", desktopId: "" })[0],
+  "/opt/app/icon.png")
+check("names and paths are not case-folded together",
+  O.iconCandidates({ icon: "/opt/Icon.png", cls: "", desktopId: "" }),
+  ["/opt/Icon.png"])
+check("an empty app still returns no blank-leading candidates",
+  O.iconCandidates({}), [])
+check("null app is tolerated", O.iconCandidates(null), [])
+
+// The letter tile: first letter of the display name, else class, else id.
+check("prefers the display name", O.iconLetter({ name: "Firefox", cls: "firefox" }), "F")
+check("falls back to the window class when no name", O.iconLetter({ cls: "v2rayN" }), "V")
+check("falls back to the desktop id when neither", O.iconLetter({ desktopId: "com.obsproject.Studio" }), "C")
+check("uppercases so it reads as an avatar", O.iconLetter({ name: "kitty" }), "K")
+check("a name with no letters still returns its first character",
+  O.iconLetter({ name: "2048" }), "2")
+check("a symbol-only name still returns something", O.iconLetter({ name: "!!!" }), "!")
+check("totally empty app gets a placeholder", O.iconLetter({}), "#")
+check("null app is tolerated", O.iconLetter(null), "#")
+
 console.log(failures === 0 ? "\nAll checks passed." : "\n" + failures + " check(s) failed.")
 process.exit(failures === 0 ? 0 : 1)
