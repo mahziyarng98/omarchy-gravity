@@ -64,8 +64,9 @@ Panel {
 
   readonly property var appLibrary: bar && bar.shell ? bar.shell.appLibrary : null
 
-  // name -> { path, score } for every icon file on disk, built once from one
-  // `find` when the panel loads (see iconIndexProcess below). Quickshell's
+  // name -> { path, score } for every icon file on disk, built once from two
+  // `find` runs when the panel loads (see iconHomeProcess and
+  // iconShareProcess below). Quickshell's
   // icon theme is preferred while it works; this is the fallback that keeps
   // real artwork visible when the configured theme is broken or absent.
   property var iconIndex: ({})
@@ -895,9 +896,9 @@ Panel {
               }
 
               // The resolved icon. Its source is the end of the chain in
-              // iconUrl(); when that returns "" (no candidate and not even the
-              // generic icon resolved) or the image itself fails to decode, the
-              // letter tile below takes the slot -- never a blank square.
+              // iconUrl(); when that returns "" (no candidate resolved) or the
+              // image itself fails to load, the letter tile below is shown
+              // instead of a blank square.
               Image {
                 id: chipIcon
                 anchors.centerIn: parent

@@ -142,7 +142,7 @@ system icon theme, a direct lookup of the icon file on disk, and finally a
 letter tile showing the app's first letter. A broken or missing system icon
 theme (for example `gsettings` pointing at a theme that is not installed) used
 to leave slots blank; Gravity now works around that by finding the file
-itself, so a slot is never empty.
+itself. When an icon cannot be loaded, a letter tile is shown instead.
 
 ## Usage
 
