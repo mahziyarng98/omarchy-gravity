@@ -415,19 +415,46 @@ Panel {
     }
   }
 
-  // One walk of the icon locations, once per shell start. The result is a
-  // name -> best file map, so opening the ring and rotating it never touches
-  // the disk. /usr/share is capped at four levels so the scan covers
-  // /usr/share/<app>/... without walking the thousands of files under
-  // /usr/share/icons a second time.
+  // One walk of the icon locations, once per shell start, as two read-only
+  // `find` runs with no shell in between. The result is a name -> best file
+  // map, so opening the ring and rotating it never touches the disk. The
+  // /usr/share walk is capped at four levels and prunes icons/ and pixmaps/,
+  // which the first run already covers deeper, so nothing is listed twice.
+  // stderr is not collected: a missing directory simply lists nothing.
+  property string iconListingHome: ""
+  property string iconListingShare: ""
+
+  function rebuildIconIndex() {
+    root.iconIndex = Orbit.parseIconIndex(root.iconListingHome + "\n" + root.iconListingShare)
+  }
+
   Process {
-    id: iconIndexProcess
+    id: iconHomeProcess
     running: true
-    command: ["bash", "-lc", "find \"$HOME/.local/share/icons\" /usr/share/icons /usr/share/pixmaps /opt -maxdepth 6 -type f \\( -iname '*.png' -o -iname '*.svg' -o -iname '*.xpm' \\) 2>/dev/null; find /usr/share -maxdepth 4 -type f \\( -iname '*.png' -o -iname '*.svg' -o -iname '*.xpm' \\) 2>/dev/null"]
+    command: ["find", root.home + "/.local/share/icons", "/usr/share/icons", "/usr/share/pixmaps", "/opt",
+      "-maxdepth", "6", "-type", "f",
+      "(", "-iname", "*.png", "-o", "-iname", "*.svg", "-o", "-iname", "*.xpm", ")"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        root.iconIndex = Orbit.parseIconIndex(text)
+        root.iconListingHome = text
+        root.rebuildIconIndex()
+      }
+    }
+  }
+
+  Process {
+    id: iconShareProcess
+    running: true
+    command: ["find", "/usr/share", "-maxdepth", "4",
+      "(", "-path", "/usr/share/icons", "-o", "-path", "/usr/share/pixmaps", ")", "-prune", "-o",
+      "-type", "f",
+      "(", "-iname", "*.png", "-o", "-iname", "*.svg", "-o", "-iname", "*.xpm", ")", "-print"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.iconListingShare = text
+        root.rebuildIconIndex()
       }
     }
   }

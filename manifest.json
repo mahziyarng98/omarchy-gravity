@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.mahziyarng98.gravity",
   "name": "Gravity",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "author": "mahziyarng98",
   "license": "MIT",
   "description": "An orbital launcher that surfaces the apps you actually use, ranked by launches in a rolling three-day window, with suggestions filling any slot real usage has not claimed yet",

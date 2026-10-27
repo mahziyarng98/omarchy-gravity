@@ -21,4 +21,5 @@ This project is maintained by one person. I will acknowledge your report and wor
 ## Scope
 
 - **In scope:** the plugin code in this repository, including how it stores app-launch history.
+- **What the plugin runs and reads:** `mkdir -p` (state directory), `hyprctl clients -j` and `hyprctl dispatch focuswindow`, and `uwsm-app -- gtk-launch`. Since 1.2.2 it also runs a one-time, read-only `find` (no shell) that lists icon file names, not contents, under `~/.local/share/icons`, `/usr/share/icons`, `/usr/share/pixmaps`, `/opt` and `/usr/share`; the output stays in memory. It makes no network connections, uses no `sudo`, and writes only to `~/.local/state/omarchy/gravity/`.
 - **Out of scope:** bugs in Omarchy, Quickshell, or Hyprland. Please report those to their own projects.

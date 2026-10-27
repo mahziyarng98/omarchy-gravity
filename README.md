@@ -122,6 +122,28 @@ rm -rf ~/.local/state/omarchy/gravity
 Nothing else on the system is touched: Gravity writes only inside that one
 directory and never edits your Hyprland or Omarchy configuration.
 
+## What Gravity runs and reads
+
+- **Hyprland events:** only `openwindow` events; only the window class is kept.
+- **Commands:** `mkdir -p` for the state directory, `hyprctl clients -j` and
+  `hyprctl dispatch focuswindow` to focus a running app, and
+  `uwsm-app -- gtk-launch` to launch one.
+- **Icon lookup:** one read-only `find` at startup (two invocations, no shell)
+  lists icon *file names*, never contents, under `~/.local/share/icons`,
+  `/usr/share/icons`, `/usr/share/pixmaps`, `/opt` and `/usr/share`. The list is
+  kept only in memory and is never written anywhere.
+- **Writes:** only the usage store, `~/.local/state/omarchy/gravity/`.
+- **Network, `sudo`:** none.
+
+## Icons
+
+Each slot looks for an icon in this order: the desktop entry's own icon, the
+system icon theme, a direct lookup of the icon file on disk, and finally a
+letter tile showing the app's first letter. A broken or missing system icon
+theme (for example `gsettings` pointing at a theme that is not installed) used
+to leave slots blank; Gravity now works around that by finding the file
+itself, so a slot is never empty.
+
 ## Usage
 
 Click the turning mark in the bar, or press the shortcut. The panel opens
