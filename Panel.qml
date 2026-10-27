@@ -64,6 +64,12 @@ Panel {
 
   readonly property var appLibrary: bar && bar.shell ? bar.shell.appLibrary : null
 
+  // name -> { path, score } for every icon file on disk, built once from one
+  // `find` when the panel loads (see iconIndexProcess below). Quickshell's
+  // icon theme is preferred while it works; this is the fallback that keeps
+  // real artwork visible when the configured theme is broken or absent.
+  property var iconIndex: ({})
+
   function describeClass(cls) {
     var entry = null
     try {
@@ -172,21 +178,26 @@ Panel {
   // a failed name is what lets the caller walk the next candidate instead of
   // settling for a generic icon the moment the first guess misses.
   function iconCandidateUrl(name) {
-    var value = String(name || "")
+    var value = String(name || "").trim()
     if (!value) return ""
     if (value.indexOf("file://") === 0 || value.indexOf("image://") === 0) return value
     if (value.charAt(0) === "/") return Util.fileUrl(value)
+    // The theme is asked first, because a theme-aware icon is the right one
+    // when it exists. If it does not (a missing icon-theme directory makes
+    // Quickshell.iconPath return ""), take the cached on-disk index instead
+    // of giving up on this candidate.
     var themed = Quickshell.iconPath(value, true)
-    return themed.length > 0 ? themed : ""
+    if (themed.length > 0) return themed
+    var direct = Orbit.bestIconFile(root.iconIndex, [value])
+    return direct ? Util.fileUrl(direct) : ""
   }
 
   // The resolution chain, most specific first: the desktop entry's icon, the
   // lowercased window class, the icon of any entry declaring that class as its
   // StartupWMClass, then the desktop id. Each is probed individually so a miss
-  // on one still reaches the others. The generic executable icon is the last
-  // icon before the caller's letter tile -- and if even that cannot resolve
-  // (as under a broken/absent icon theme) the tile carries the slot, so a chip
-  // is never a blank black square.
+  // on one still reaches the others. A slot with no artwork anywhere on disk
+  // gets the caller's letter tile -- never a generic executable icon, and
+  // never a blank square.
   function iconUrl(app) {
     var candidates = Orbit.iconCandidates(app, {
       startupIcon: function(cls) { return root.startupIcon(cls) }
@@ -195,7 +206,7 @@ Panel {
       var url = root.iconCandidateUrl(candidates[i])
       if (url) return url
     }
-    return root.iconCandidateUrl("application-x-executable")
+    return ""
   }
 
   function iconLetter(app) {
@@ -401,6 +412,23 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyClients(text)
+    }
+  }
+
+  // One walk of the icon locations, once per shell start. The result is a
+  // name -> best file map, so opening the ring and rotating it never touches
+  // the disk. /usr/share is capped at four levels so the scan covers
+  // /usr/share/<app>/... without walking the thousands of files under
+  // /usr/share/icons a second time.
+  Process {
+    id: iconIndexProcess
+    running: true
+    command: ["bash", "-lc", "find \"$HOME/.local/share/icons\" /usr/share/icons /usr/share/pixmaps /opt -maxdepth 6 -type f \\( -iname '*.png' -o -iname '*.svg' -o -iname '*.xpm' \\) 2>/dev/null; find /usr/share -maxdepth 4 -type f \\( -iname '*.png' -o -iname '*.svg' -o -iname '*.xpm' \\) 2>/dev/null"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.iconIndex = Orbit.parseIconIndex(text)
+      }
     }
   }
 
@@ -818,9 +846,12 @@ Panel {
                 id: chipFace
                 anchors.fill: parent
                 radius: Math.round(width * 0.3)
-                color: Util.alpha(Color.popups.background, 0.86)
+                // Keep the face dark, but not invisible on a black wallpaper:
+                // the lift is the theme's own ink, so it follows any Omarchy
+                // theme rather than hardcoding a grey.
+                color: Util.alpha(Color.popups.background, 0.92)
                 border.width: sat.selected ? Math.max(1, Style.space(2)) : Math.max(1, Style.space(1))
-                border.color: sat.selected ? root.accentInk : Util.alpha(root.ink, 0.16)
+                border.color: sat.selected ? root.accentInk : Util.alpha(root.ink, 0.30)
 
                 Behavior on border.color { ColorAnimation { duration: 160 } }
 
@@ -830,7 +861,7 @@ Panel {
                 Rectangle {
                   anchors.fill: parent
                   radius: parent.radius
-                  color: sat.selected ? Style.hoverFillFor(root.ink, Color.accent, Color.urgent) : "transparent"
+                  color: sat.selected ? Style.hoverFillFor(root.ink, Color.accent, Color.urgent) : Util.alpha(root.ink, 0.05)
 
                   Behavior on color { ColorAnimation { duration: 160 } }
                 }

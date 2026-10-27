@@ -131,6 +131,91 @@ function iconLetter(app) {
   return source ? source.charAt(0).toUpperCase() : "#"
 }
 
+// ------------------------------------------------------- the on-disk icons
+
+// A name -> best file index built once from `find` output. The icon theme is
+// the first place a name is looked up, but it is not the only place: a theme
+// can be missing entirely (as when gsettings points at an uninstalled theme)
+// while every app's artwork still sits on disk under hicolor, pixmaps, /opt,
+// or its own /usr/share/<app> folder. Keeping that second lookup here, as an
+// index, means the per-frame path is a map read -- never a walk of the disk.
+//
+// An SVG is preferred within a source (it scales to any chip), otherwise the
+// largest PNG wins. Source order matters more: local icons, then hicolor,
+// then other installed themes, then pixmaps, /opt, and /usr/share/<app> --
+// exactly the order the app artwork is conventionally installed in.
+function iconFileScore(path) {
+  var p = String(path === undefined || path === null ? "" : path)
+  var base = p.slice(p.lastIndexOf("/") + 1).toLowerCase()
+  var dot = base.lastIndexOf(".")
+  var ext = dot >= 0 ? base.slice(dot + 1) : ""
+  var quality = 0
+  if (ext === "svg") {
+    quality = 1000000
+  } else if (ext === "png") {
+    var size = p.toLowerCase().match(/(?:^|\/)(\d+)x(\d+)(?:\/|$)/)
+    if (size) quality = Math.min(Number(size[1]), Number(size[2])) || 0
+  } else if (ext === "xpm") {
+    quality = 1
+  } else {
+    return 0
+  }
+
+  var tier = 0
+  if (p.indexOf("/.local/share/icons/") >= 0) tier = 6
+  else if (p.indexOf("/hicolor/") >= 0) tier = 5
+  else if (p.indexOf("/usr/share/icons/") >= 0) tier = 4
+  else if (p.indexOf("/usr/share/pixmaps/") >= 0) tier = 3
+  else if (p.indexOf("/opt/") === 0) tier = 2
+  else if (p.indexOf("/usr/share/") === 0) tier = 1
+  return tier * 10000000 + quality * 10
+}
+
+// The lookup key for one file: its basename without the extension, folded to
+// lowercase so the window class "v2rayN" finds "v2rayN.png" and "v2rayn.png"
+// alike. Non-absolute paths are not part of the index.
+function iconIndexName(path) {
+  var p = String(path === undefined || path === null ? "" : path).trim()
+  if (!p || p.charAt(0) !== "/") return ""
+  var base = p.slice(p.lastIndexOf("/") + 1)
+  var dot = base.lastIndexOf(".")
+  if (dot <= 0) return ""
+  return base.slice(0, dot).toLowerCase()
+}
+
+// Turn the newline-separated output of one `find` into the index above. Pure:
+// the caller owns the process and calls this once when its stream ends.
+function parseIconIndex(text) {
+  var index = {}
+  var lines = String(text === undefined || text === null ? "" : text).split("\n")
+  for (var i = 0; i < lines.length; i++) {
+    var path = lines[i].trim()
+    var name = iconIndexName(path)
+    if (!name) continue
+    var score = iconFileScore(path)
+    if (score <= 0) continue
+    var current = index[name]
+    if (!current || score > current.score) index[name] = { path: path, score: score }
+  }
+  return index
+}
+
+// First index hit among alternative names, in caller order. Returns the file
+// path so the QML side can hand it to Util.fileUrl(). No filesystem access:
+// a miss simply falls through to the next name, and then to the letter tile.
+function bestIconFile(index, names) {
+  if (!index) return ""
+  var list = Array.isArray(names) ? names : [names]
+  for (var i = 0; i < list.length; i++) {
+    var name = String(list[i] === undefined || list[i] === null ? "" : list[i]).trim().toLowerCase()
+    if (!name || name.charAt(0) === "/" || name.indexOf("://") >= 0) continue
+    if (/\.(png|svg|xpm)$/.test(name)) name = name.slice(0, name.lastIndexOf("."))
+    var hit = index[name]
+    if (hit && hit.path) return String(hit.path)
+  }
+  return ""
+}
+
 // ------------------------------------------------------------- the store
 
 function emptyStore() {
@@ -543,6 +628,7 @@ if (typeof module !== "undefined" && module.exports) {
     SUGGESTION_POOL: SUGGESTION_POOL, sanitizeSuggestions: sanitizeSuggestions,
     normalizeClass: normalizeClass, classKey: classKey, parseList: parseList,
     iconCandidates: iconCandidates, iconLetter: iconLetter,
+    iconFileScore: iconFileScore, parseIconIndex: parseIconIndex, bestIconFile: bestIconFile,
     emptyStore: emptyStore, parseStore: parseStore, serializeStore: serializeStore,
     launchesWithin: launchesWithin, lastLaunchOf: lastLaunchOf,
     prunedLaunches: prunedLaunches, pruneApps: pruneApps,

@@ -348,5 +348,61 @@ check("a symbol-only name still returns something", O.iconLetter({ name: "!!!" }
 check("totally empty app gets a placeholder", O.iconLetter({}), "#")
 check("null app is tolerated", O.iconLetter(null), "#")
 
+// The on-disk index: when the theme cannot answer, the file walk built once
+// at startup is what keeps a real icon on the chip. The tests pin the choice
+// rules (SVG, largest PNG, source tier) and the name folding.
+console.log("On-disk icon index")
+var listing = [
+  "/usr/share/icons/hicolor/256x256/apps/firefox.png",
+  "/usr/share/icons/hicolor/512x512/apps/firefox.png",
+  "/usr/share/icons/hicolor/scalable/apps/firefox.svg",
+  "/usr/share/icons/Adwaita/48x48/apps/firefox.png",
+  "/usr/share/pixmaps/v2rayN.png",
+  "/opt/Cloudflare WARP/zero-trust-orange.png",
+  ""
+].join("\n")
+var iconIndex = O.parseIconIndex(listing)
+check("an SVG wins over the largest PNG",
+  O.bestIconFile(iconIndex, ["firefox"]),
+  "/usr/share/icons/hicolor/scalable/apps/firefox.svg")
+check("name lookup is case-insensitive",
+  O.bestIconFile(iconIndex, ["v2rayn"]), "/usr/share/pixmaps/v2rayN.png")
+check("a path with a space is preserved",
+  O.bestIconFile(iconIndex, ["zero-trust-orange"]), "/opt/Cloudflare WARP/zero-trust-orange.png")
+check("an extension on the candidate is tolerated",
+  O.bestIconFile(iconIndex, ["v2rayN.png"]), "/usr/share/pixmaps/v2rayN.png")
+check("the first alternative that hits wins",
+  O.bestIconFile(iconIndex, ["missing", "v2rayn"]), "/usr/share/pixmaps/v2rayN.png")
+check("a miss returns empty so the letter tile can take over",
+  O.bestIconFile(iconIndex, ["warp-taskbar"]), "")
+check("absolute candidates are not looked up in the index",
+  O.bestIconFile(iconIndex, ["/opt/x/y.png"]), "")
+check("a null index is tolerated", O.bestIconFile(null, ["firefox"]), "")
+
+var pngs = O.parseIconIndex([
+  "/usr/share/icons/Adwaita/48x48/apps/steam.png",
+  "/usr/share/icons/hicolor/256x256/apps/steam.png",
+  "/usr/share/icons/hicolor/16x16/apps/steam.png"
+].join("\n"))
+check("the largest PNG wins",
+  O.bestIconFile(pngs, ["steam"]), "/usr/share/icons/hicolor/256x256/apps/steam.png")
+check("same-size ties prefer hicolor over another theme",
+  O.bestIconFile(O.parseIconIndex([
+    "/usr/share/icons/Adwaita/256x256/apps/steam.png",
+    "/usr/share/icons/hicolor/256x256/apps/steam.png"
+  ].join("\n")), ["steam"]), "/usr/share/icons/hicolor/256x256/apps/steam.png")
+check("hicolor still wins over another theme's larger SVG",
+  O.bestIconFile(O.parseIconIndex([
+    "/usr/share/icons/Adwaita/apps/scalable/steam.svg",
+    "/usr/share/icons/hicolor/256x256/apps/steam.png"
+  ].join("\n")), ["steam"]), "/usr/share/icons/hicolor/256x256/apps/steam.png")
+check("a local icon outranks hicolor",
+  O.bestIconFile(O.parseIconIndex([
+    "/usr/share/icons/hicolor/256x256/apps/steam.png",
+    "/home/u/.local/share/icons/hicolor/48x48/apps/steam.png"
+  ].join("\n")), ["steam"]), "/home/u/.local/share/icons/hicolor/48x48/apps/steam.png")
+check("junk lines are ignored",
+  Object.keys(O.parseIconIndex("not a path\n\n/usr/share/icons/x.png")).length, 1)
+
 console.log(failures === 0 ? "\nAll checks passed." : "\n" + failures + " check(s) failed.")
 process.exit(failures === 0 ? 0 : 1)
