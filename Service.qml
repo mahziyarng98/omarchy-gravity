@@ -27,6 +27,8 @@ Item {
   property var manifest: null
   property string omarchyPath: Quickshell.env("OMARCHY_PATH")
 
+  onShellChanged: root.refreshSuggestions()
+
   readonly property string home: Quickshell.env("HOME")
   // Same convention as the first-party agents plugin: mutable per-machine
   // state lives under the XDG state dir, never in the config tree.
@@ -40,6 +42,10 @@ Item {
   // yet. Rolled once and persisted, so a cold-start ring is the same shelf
   // every time you open it.
   property var suggestions: []
+  // The shell mounts enabled services at startup. Stay dormant until the user
+  // opens Gravity once, then persist activation so system-wide tracking can
+  // resume on future shell starts.
+  property bool activated: false
   property bool storeLoaded: false
   property bool dirReady: false
   property bool writePending: false
@@ -123,7 +129,7 @@ Item {
   // rewriting it when the sweep bites is also what nudges every open panel's
   // file watcher into re-reading.
   function sweep() {
-    if (!root.storeLoaded) return
+    if (!root.activated || !root.storeLoaded) return
     var swept = Orbit.pruneApps(root.apps, root.nowSeconds())
     if (!swept.changed) return
     root.apps = swept.apps
@@ -138,13 +144,14 @@ Item {
   // desktop file claims.
   function suggestionPool() {
     var library = root.shell ? root.shell.appLibrary : null
-    if (!library || typeof library.sortedEntries !== "function") return []
+    if (!library || typeof library.sortedEntries !== "function") return null
     var rows = []
     try {
-      rows = library.sortedEntries("") || []
+      rows = library.sortedEntries("")
     } catch (e) {
-      return []
+      return null
     }
+    if (!Array.isArray(rows)) return null
     var out = []
     for (var i = 0; i < rows.length; i++) {
       var entry = rows[i] && rows[i].entry
@@ -179,43 +186,16 @@ Item {
   // only two things that change a suggestion are the two that should -- it was
   // uninstalled, or a real app took its slot.
   function refreshSuggestions() {
-    if (!root.storeLoaded) return
+    if (!root.activated || !root.storeLoaded) return
     var pool = suggestionPool()
-    if (!pool.length) return
+    // A temporarily unavailable app library is not the same as a genuinely
+    // empty installed-app list. Keep the reserve on transient lookup failures,
+    // but clear it when the library is ready and has no launchable entries.
+    if (pool === null) return
 
-    var installed = {}
-    for (var i = 0; i < pool.length; i++) installed[pool[i]] = true
-
-    var kept = []
-    var seen = {}
-    for (var j = 0; j < root.suggestions.length; j++) {
-      var id = String(root.suggestions[j])
-      if (!installed[id] || seen[id]) continue
-      seen[id] = true
-      kept.push(id)
-    }
-    var changed = kept.length !== root.suggestions.length
-
-    // Anything above the cap goes now, not at the next reroll, so the reserve
-    // is never observably longer than it claims to be -- a hand-edited file is
-    // normalised on the load that follows it.
-    if (kept.length > Orbit.SUGGESTION_POOL) {
-      kept = kept.slice(0, Orbit.SUGGESTION_POOL)
-      changed = true
-    }
-
-    if (kept.length < Orbit.SUGGESTION_POOL) {
-      var candidates = []
-      for (var k = 0; k < pool.length; k++) if (!seen[pool[k]]) candidates.push(pool[k])
-      candidates = root.shuffled(candidates)
-      for (var m = 0; m < candidates.length && kept.length < Orbit.SUGGESTION_POOL; m++) {
-        kept.push(candidates[m])
-        changed = true
-      }
-    }
-
-    if (!changed) return
-    root.suggestions = kept
+    var reconciled = Orbit.reconcileSuggestions(root.suggestions, pool, root.shuffled)
+    if (!reconciled || !reconciled.changed) return
+    root.suggestions = reconciled.suggestions
     writeDebounce.restart()
   }
 
@@ -224,6 +204,17 @@ Item {
     if (!name) return
     root.apps = Orbit.recordLaunch(root.apps, name, root.nowSeconds(), root.describe(name))
     writeDebounce.restart()
+  }
+
+  function startTracking(): string {
+    var wasActivated = root.activated
+    root.activated = true
+    if (root.storeLoaded) {
+      root.sweep()
+      root.refreshSuggestions()
+      writeDebounce.restart()
+    }
+    return wasActivated ? "tracking already active" : "tracking started"
   }
 
   // The file is authoritative for everything counted before this process
@@ -235,7 +226,12 @@ Item {
     var stored = Orbit.parseStore(raw)
     root.apps = Orbit.mergeApps(stored.apps, root.apps)
     root.suggestions = stored.suggestions
+    root.activated = root.activated || stored.activated
     root.storeLoaded = true
+    // Loading one small state file is all the dormant service does. No folder
+    // creation, timers, Hyprland events, app-library work, or icon scans start
+    // until the user explicitly opens the plugin.
+    if (!root.activated) return
     // A machine that was off for a week comes back with a store full of
     // launches that expired while it slept. Sweep once on load rather than
     // waiting up to ten minutes for the timer to notice.
@@ -259,7 +255,7 @@ Item {
       return
     }
     root.writePending = false
-    usageFile.setText(Orbit.serializeStore(root.apps, root.suggestions))
+    usageFile.setText(Orbit.serializeStore(root.apps, root.suggestions, root.activated))
   }
 
   // ---- IPC. `omarchy-shell gravity-usage ...` is a maintenance surface for
@@ -302,8 +298,14 @@ Item {
     // Count a launch by hand. Useful for testing the ranking without waiting
     // for real usage to accumulate.
     function record(windowClass: string): string {
+      root.startTracking()
       root.recordClass(windowClass)
       return "recorded " + Orbit.normalizeClass(windowClass)
+    }
+
+    // Called by the panel on its first user-driven open.
+    function start(): string {
+      return root.startTracking()
     }
 
     // Forget one app, or everything. Both mark the store loaded even if the
@@ -340,6 +342,7 @@ Item {
 
     // Throw the shelf away and roll a new one.
     function reroll(): string {
+      root.startTracking()
       root.suggestions = []
       root.refreshSuggestions()
       return root.suggestions.length
@@ -349,21 +352,21 @@ Item {
   }
 
   Connections {
-    target: root.shell ? root.shell.appLibrary : null
+    target: root.activated && root.shell ? root.shell.appLibrary : null
     ignoreUnknownSignals: true
     function onAppsChanged() { root.refreshSuggestions() }
   }
 
   Connections {
-    target: DesktopEntries.applications
+    target: root.activated ? DesktopEntries.applications : null
     function onValuesChanged() { root.refreshSuggestions() }
   }
 
   Connections {
-    target: Hyprland
+    target: root.activated ? Hyprland : null
 
     function onRawEvent(event) {
-      if (event.name !== "openwindow") return
+      if (!root.activated || event.name !== "openwindow") return
       root.recordClass(Orbit.classFromOpenWindow(event.data))
     }
   }
@@ -382,7 +385,7 @@ Item {
   Timer {
     id: sweepTimer
     interval: 10 * 60 * 1000
-    running: true
+    running: root.activated
     repeat: true
     triggeredOnStart: false
     onTriggered: root.sweep()
@@ -414,8 +417,6 @@ Item {
     onLoaded: root.adoptStore(usageFile.text())
     onLoadFailed: root.adoptStore("")
   }
-
-  Component.onCompleted: mkdirProcess.running = true
 
   // A clean shutdown (logout, omarchy-restart-shell, a plugin reload) tears
   // this object down while a debounced write may still be pending. Flush it.

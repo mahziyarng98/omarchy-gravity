@@ -97,6 +97,7 @@ Panel {
   // age past three days, with nothing else happening -- so the binding needs
   // a reason to re-run even when no launch and no desktop entry has changed.
   property int windowRevision: 0
+  property bool usageStartRequested: false
 
   readonly property var apps: {
     root.usageRevision      // reactive dependencies: the store, the
@@ -190,7 +191,9 @@ Panel {
     var themed = Quickshell.iconPath(value, true)
     if (themed.length > 0) return themed
     var direct = Orbit.bestIconFile(root.iconIndex, [value])
-    return direct ? Util.fileUrl(direct) : ""
+    if (direct) return Util.fileUrl(direct)
+    var bundled = Orbit.bundledIconAsset(value)
+    return bundled ? Qt.resolvedUrl(bundled) : ""
   }
 
   // The resolution chain, most specific first: the desktop entry's icon, the
@@ -237,7 +240,6 @@ Panel {
   readonly property int stageSize: Math.round(orbitRadius * 2 + chipSize * 1.7)
 
   // ---- Motion state.
-  property real orbitAngle: 0
   // Set once the surface is actually on screen, which is what the burst
   // animation keys off: starting it before the window maps would spend the
   // stagger on a frame nobody sees.
@@ -279,8 +281,20 @@ Panel {
   // requires logging out is not a trade worth making to avoid it.
 
   function open() {
+    if (!root.usageStartRequested) {
+      root.usageStartRequested = true
+      // The service is intentionally dormant until the first user-initiated
+      // open. The host IPC call only starts its listener once and persists
+      // that opt-in for future shell sessions.
+      Quickshell.execDetached(["omarchy-shell", "-q", "gravity-usage", "start"])
+    }
     usageFile.reload()
-    if (root.appLibrary && typeof root.appLibrary.refreshIcons === "function") root.appLibrary.refreshIcons()
+    // Deliberately no appLibrary.refreshIcons() here. Triggering the shell's
+    // icon-index rescan as this surface maps crashed Qt 6.12's scene-graph
+    // batcher (QSGBatchRenderer::prepareRenderPass, SIGSEGV in the render
+    // thread) on every open. Gravity resolves icons from its own index and
+    // Quickshell.iconPath, so it does not need the shell-wide rescan; the
+    // dock and menu refresh on their own when they open.
     root.selectedIndex = -1
     root.cursorActive = false
     root.hoverActive = false
@@ -463,7 +477,7 @@ Panel {
   FileView {
     id: usageFile
     path: root.usagePath
-    watchChanges: true
+    watchChanges: root.opened
     printErrors: false
     onLoaded: root.applyUsage(usageFile.text())
     // `text()` is stale inside the change signal, so route both paths through
@@ -489,15 +503,16 @@ Panel {
     onTriggered: root.windowRevision++
   }
 
-  // The one long-running animation: the ring's own rotation. It pauses rather
-  // than stops on hover, so letting go picks the sweep up where it left off.
-  NumberAnimation on orbitAngle {
-    running: root.opened
-    paused: root.frozen
-    loops: Animation.Infinite
+  // Run the single shared rotation on the render thread. Per-icon x/y bindings
+  // remain static, avoiding six GUI-thread geometry recalculations per frame.
+  RotationAnimator {
+    target: orbit
     from: 0
     to: 360
     duration: root.orbitMs
+    loops: Animation.Infinite
+    running: root.opened
+    paused: root.frozen
   }
 
   PanelWindow {
@@ -793,54 +808,62 @@ Panel {
           }
         }
 
-        // ---- The apps.
-        Repeater {
-          model: root.apps
+        // ---- The apps. Lay out their orbit positions once, then rotate their
+        //      common parent. Updating one transform is cheaper than
+        //      recalculating six x/y bindings on every orbit tick.
+        Item {
+          id: orbit
+          anchors.fill: parent
+          rotation: 0
+          transformOrigin: Item.Center
 
-          Item {
-            id: sat
-
-            required property var modelData
-            required property int index
-
-            readonly property bool selected: root.selectedIndex === sat.index
-            readonly property real angle: Orbit.angleFor(sat.index, root.appCount, root.orbitAngle)
-
-            // 0 at the centre, 1 on the ring. Everything about the opening
-            // and closing animation is this one number.
-            property real burst: root.staged ? 1 : 0
-            readonly property real distance: root.orbitRadius * sat.burst
-
-            // Each icon leaves a beat after the one before it on the way out,
-            // and the order reverses on the way back in, so the ring
-            // assembles and disassembles from the same end.
-            Behavior on burst {
-              SequentialAnimation {
-                PauseAnimation {
-                  duration: root.staged ? sat.index * 55 : (root.appCount - 1 - sat.index) * 26
-                }
-                NumberAnimation {
-                  duration: root.staged ? 520 : 240
-                  easing.type: root.staged ? Easing.OutBack : Easing.InCubic
-                  easing.overshoot: 1.25
-                }
-              }
-            }
-
-            width: root.chipSize
-            height: root.chipSize
-            x: stage.width / 2 + sat.distance * Math.cos(sat.angle * Math.PI / 180) - width / 2
-            y: stage.height / 2 + sat.distance * Math.sin(sat.angle * Math.PI / 180) - height / 2
-            opacity: Math.max(0, Math.min(1, sat.burst * 1.6))
-            // Scale is driven straight off the burst here; the selection
-            // scale lives on the child so the two never fight over one
-            // property or damp each other's animation.
-            scale: 0.35 + 0.65 * Math.min(1, sat.burst)
+          Repeater {
+            model: root.apps
 
             Item {
-              id: chip
-              anchors.fill: parent
-              scale: sat.selected ? 1.16 : 1.0
+              id: sat
+
+              required property var modelData
+              required property int index
+
+              readonly property bool selected: root.selectedIndex === sat.index
+              readonly property real angle: Orbit.angleFor(sat.index, root.appCount, 0)
+
+              // 0 at the centre, 1 on the ring. Everything about the opening
+              // and closing animation is this one number.
+              property real burst: root.staged ? 1 : 0
+              readonly property real distance: root.orbitRadius * sat.burst
+
+              // Each icon leaves a beat after the one before it on the way out,
+              // and the order reverses on the way back in, so the ring
+              // assembles and disassembles from the same end.
+              Behavior on burst {
+                SequentialAnimation {
+                  PauseAnimation {
+                    duration: root.staged ? sat.index * 55 : (root.appCount - 1 - sat.index) * 26
+                  }
+                  NumberAnimation {
+                    duration: root.staged ? 520 : 240
+                    easing.type: root.staged ? Easing.OutBack : Easing.InCubic
+                    easing.overshoot: 1.25
+                  }
+                }
+              }
+
+              width: root.chipSize
+              height: root.chipSize
+              x: orbit.width / 2 + sat.distance * Math.cos(sat.angle * Math.PI / 180) - width / 2
+              y: orbit.height / 2 + sat.distance * Math.sin(sat.angle * Math.PI / 180) - height / 2
+              opacity: Math.max(0, Math.min(1, sat.burst * 1.6))
+              // Scale is driven straight off the burst here; the selection
+              // scale lives on the child so the two never fight over one
+              // property or damp each other's animation.
+              scale: 0.35 + 0.65 * Math.min(1, sat.burst)
+
+              Item {
+                id: chip
+                anchors.fill: parent
+                scale: sat.selected ? 1.16 : 1.0
 
               Behavior on scale {
                 NumberAnimation { duration: 240; easing.type: Easing.OutBack; easing.overshoot: 2.2 }
@@ -989,4 +1012,5 @@ Panel {
       }
     }
   }
+}
 }

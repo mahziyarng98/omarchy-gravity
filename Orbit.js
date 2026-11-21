@@ -118,6 +118,13 @@ function iconCandidates(app, options) {
   return out
 }
 
+// A small number of desktop apps ship their icon beside a per-user AppImage
+// instead of in a standard icon theme. Bundle those assets with the plugin so
+// their desktop-entry icon name can still resolve portably.
+function bundledIconAsset(name) {
+  return classKey(name) === "ai.opencode" ? "assets/icons/ai.opencode.png" : ""
+}
+
 // The single character drawn on a chip when no icon resolves: the first
 // letter of the display name, else of the window class, else of the desktop
 // id. Uppercased so it reads as an avatar rather than a stray fragment.
@@ -219,7 +226,7 @@ function bestIconFile(index, names) {
 // ------------------------------------------------------------- the store
 
 function emptyStore() {
-  return { version: STORE_VERSION, apps: {}, suggestions: [] }
+  return { version: STORE_VERSION, activated: false, apps: {}, suggestions: [] }
 }
 
 // Desktop ids, in the order they were rolled. Persisted so a cold-start ring
@@ -242,6 +249,52 @@ function sanitizeSuggestions(raw, cap) {
     out.push(id)
   }
   return out
+}
+
+// Reconcile a persisted suggestion reserve with the currently launchable app
+// ids. `null` means the source is temporarily unavailable; an empty array is a
+// real, empty pool and therefore clears stale picks. Existing valid picks keep
+// their order and new candidates are supplied by the caller's randomizer.
+function reconcileSuggestions(current, pool, randomize, cap) {
+  if (!Array.isArray(pool)) return null
+
+  var limit = Math.floor(Number(cap))
+  if (!isFinite(limit) || limit < 0) limit = SUGGESTION_POOL
+  var installed = Object.create(null)
+  for (var i = 0; i < pool.length; i++) installed[String(pool[i])] = true
+
+  var kept = []
+  var seen = Object.create(null)
+  var previous = Array.isArray(current) ? current : []
+  for (var j = 0; j < previous.length; j++) {
+    var id = String(previous[j])
+    if (!id || !installed[id] || seen[id]) continue
+    seen[id] = true
+    if (kept.length < limit) kept.push(id)
+  }
+
+  var changed = kept.length !== previous.length
+  if (kept.length < limit) {
+    var candidates = []
+    for (var k = 0; k < pool.length; k++) {
+      var candidate = String(pool[k])
+      if (candidate && !seen[candidate]) candidates.push(candidate)
+    }
+    if (typeof randomize === "function") {
+      try {
+        var shuffled = randomize(candidates)
+        if (Array.isArray(shuffled)) candidates = shuffled
+      } catch (e) {}
+    }
+    for (var m = 0; m < candidates.length && kept.length < limit; m++) {
+      var next = String(candidates[m])
+      if (!next || seen[next]) continue
+      seen[next] = true
+      kept.push(next)
+      changed = true
+    }
+  }
+  return { suggestions: kept, changed: changed }
 }
 
 // A record is the launch times themselves, ascending, plus whatever we know
@@ -323,6 +376,13 @@ function parseStore(raw) {
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return store
   var apps = parsed.apps && typeof parsed.apps === "object" ? parsed.apps : {}
+  // Before lazy activation existed, any persisted store could only have been
+  // created by the running tracker. Treat an old-format store as an existing
+  // opt-in so upgrades keep their previous system-wide behavior. An explicit
+  // false always wins for stores written by the lazy version.
+  store.activated = parsed.activated === true || (parsed.activated === undefined
+    && (parsed.version === 1 || parsed.version === STORE_VERSION)
+    && parsed.apps && typeof parsed.apps === "object" && !Array.isArray(parsed.apps))
   for (var cls in apps) {
     var key = normalizeClass(cls)
     if (!key) continue
@@ -332,9 +392,10 @@ function parseStore(raw) {
   return store
 }
 
-function serializeStore(apps, suggestions) {
+function serializeStore(apps, suggestions, activated) {
   return JSON.stringify({
     version: STORE_VERSION,
+    activated: activated === true,
     apps: apps || {},
     suggestions: sanitizeSuggestions(suggestions)
   }, null, 2) + "\n"
@@ -626,8 +687,9 @@ if (typeof module !== "undefined" && module.exports) {
     STORE_VERSION: STORE_VERSION, MAX_SLOTS: MAX_SLOTS, MIN_SLOTS: MIN_SLOTS,
     WINDOW_SECONDS: WINDOW_SECONDS, RETENTION_SECONDS: RETENTION_SECONDS,
     SUGGESTION_POOL: SUGGESTION_POOL, sanitizeSuggestions: sanitizeSuggestions,
+    reconcileSuggestions: reconcileSuggestions,
     normalizeClass: normalizeClass, classKey: classKey, parseList: parseList,
-    iconCandidates: iconCandidates, iconLetter: iconLetter,
+    iconCandidates: iconCandidates, bundledIconAsset: bundledIconAsset, iconLetter: iconLetter,
     iconFileScore: iconFileScore, parseIconIndex: parseIconIndex, bestIconFile: bestIconFile,
     emptyStore: emptyStore, parseStore: parseStore, serializeStore: serializeStore,
     launchesWithin: launchesWithin, lastLaunchOf: lastLaunchOf,

@@ -6,6 +6,7 @@
 //   node test/orbit-test.js
 
 var path = require("path")
+var fs = require("fs")
 var O = require(path.join(__dirname, "..", "Orbit.js"))
 
 var failures = 0
@@ -46,9 +47,9 @@ check("empty", O.parseList(""), [])
 check("array passes through", O.parseList(["a", " ", "b"]), ["a", "b"])
 
 console.log("Store parsing")
-check("empty text", O.parseStore(""), { version: 2, apps: {}, suggestions: [] })
-check("not json", O.parseStore("{oops"), { version: 2, apps: {}, suggestions: [] })
-check("array instead of object", O.parseStore("[1,2]"), { version: 2, apps: {}, suggestions: [] })
+check("empty text", O.parseStore(""), { version: 2, activated: false, apps: {}, suggestions: [] })
+check("not json", O.parseStore("{oops"), { version: 2, activated: false, apps: {}, suggestions: [] })
+check("array instead of object", O.parseStore("[1,2]"), { version: 2, activated: false, apps: {}, suggestions: [] })
 check("missing fields are filled", O.parseStore('{"apps":{"kitty":{}}}').apps.kitty,
   { launches: [], desktopId: "", name: "", icon: "" })
 check("launch times are sorted", O.parseStore('{"apps":{"k":{"launches":[30,10,20]}}}').apps.k.launches, [10, 20, 30])
@@ -56,8 +57,15 @@ check("junk timestamps are dropped", O.parseStore('{"apps":{"k":{"launches":[10,
 check("a version 1 record migrates to an empty window",
   O.parseStore('{"version":1,"apps":{"kitty":{"count":97,"last":123,"name":"kitty"}}}').apps.kitty,
   { launches: [], desktopId: "", name: "kitty", icon: "" })
+check("a legacy store with no activation field preserves tracking opt-in",
+  O.parseStore('{"version":2,"apps":{},"suggestions":[]}').activated, true)
+check("explicit dormant state is not mistaken for a legacy opt-in",
+  O.parseStore('{"version":2,"activated":false,"apps":{},"suggestions":[]}').activated, false)
 check("round trip", O.parseStore(O.serializeStore({ kitty: { launches: [10, 20] } })).apps.kitty.launches, [10, 20])
 check("serialized store declares version 2", JSON.parse(O.serializeStore({})).version, 2)
+check("new stores stay dormant unless explicitly activated", JSON.parse(O.serializeStore({})).activated, false)
+check("activation survives a store round trip",
+  O.parseStore(O.serializeStore({}, [], true)).activated, true)
 
 console.log("Counting launches")
 var apps = O.recordLaunch({}, "kitty", ago(1), { desktopId: "kitty", name: "kitty" })
@@ -270,6 +278,21 @@ check("the cap keeps the front of the list, which is what the ring draws from",
 check("duplicates do not consume cap slots",
   O.parseStore(JSON.stringify({ apps: {}, suggestions: ["a", "a", "a", "b"] })).suggestions, ["a", "b"])
 
+console.log("Reconciling persisted suggestions")
+var clearedSuggestions = O.reconcileSuggestions(["uninstalled"], [])
+check("a ready but empty pool clears stale suggestions", clearedSuggestions.suggestions, [])
+check("clearing stale suggestions reports a change", clearedSuggestions.changed, true)
+check("a temporarily unavailable pool keeps the reserve untouched",
+  O.reconcileSuggestions(["kept"], null), null)
+check("valid picks keep their order and new candidates fill the reserve",
+  O.reconcileSuggestions(["b", "gone", "a"], ["a", "b", "c", "d"], function(values) {
+    return values.reverse()
+  }, 3).suggestions,
+  ["b", "a", "d"])
+check("reconciliation deduplicates and respects the cap",
+  O.reconcileSuggestions(["x", "x", "y", "z"], ["x", "y", "z"], null, 2).suggestions,
+  ["x", "y"])
+
 console.log("Ring geometry")
 check("first slot sits at twelve o'clock", O.angleFor(0, 6, 0), -90)
 check("six slots are sixty degrees apart", O.angleFor(1, 6, 0), -30)
@@ -306,6 +329,12 @@ check("bad hyprctl output", O.pickWindowAddress(O.parseClients("not json"), "kit
 check("clients parse", O.parseClients('[{"address":"0x1"}]').length, 1)
 
 console.log("Icon resolution")
+check("OpenCode uses its bundled official icon when no system icon is installed",
+  O.bundledIconAsset("ai.opencode"), "assets/icons/ai.opencode.png")
+check("the bundled OpenCode PNG exists",
+  fs.existsSync(path.join(__dirname, "..", O.bundledIconAsset("ai.opencode"))), true)
+check("other applications do not get the OpenCode asset",
+  O.bundledIconAsset("firefox"), "")
 // The chain, most specific first: entry icon, lowercased window class, the
 // StartupWMClass-matched entry's icon, then the desktop id. Deduped and
 // case-folded so one app never burns two shots on the same name.

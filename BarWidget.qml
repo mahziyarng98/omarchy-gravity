@@ -22,16 +22,38 @@ BarWidget {
   // ---- Panel contract. Bar.findPanelWidget requires open/close/opened on
   //      the bar-widget root, so these forward rather than living on Panel.
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
+  // Keep the widget cheap on a fresh shell start. Panel.qml owns the icon
+  // index, file watcher and overlay window, so do not instantiate it until a
+  // user action actually opens Gravity.
+  property bool panelLoaded: false
+  property bool panelOpenRequested: false
 
-  function open() { if (panelLoader.item) panelLoader.item.open() }
-  function close() { if (panelLoader.item) panelLoader.item.close() }
-  function togglePanel() { if (panelLoader.item) panelLoader.item.toggle() }
+  function open() {
+    if (!panelLoader.item) {
+      root.panelOpenRequested = true
+      root.panelLoaded = true
+      return
+    }
+    root.panelOpenRequested = false
+    panelLoader.item.open()
+  }
+
+  function close() {
+    root.panelOpenRequested = false
+    if (panelLoader.item) panelLoader.item.close()
+  }
+
+  function togglePanel() {
+    if (root.opened || root.panelOpenRequested) root.close()
+    else root.open()
+  }
 
   // Forwarded so this widget can stand in for the panel as the bar's popout
   // identity when the user clicks straight from one bar panel to another.
   readonly property bool popoutSwitchClosing: panelLoader.item ? panelLoader.item.popoutSwitchClosing === true : false
 
   function closeForPopoutSwitch() {
+    root.panelOpenRequested = false
     if (panelLoader.item) panelLoader.item.closeForPopoutSwitch()
   }
 
@@ -75,12 +97,17 @@ BarWidget {
 
   Loader {
     id: panelLoader
-    active: true
+    active: root.panelLoaded
     source: Qt.resolvedUrl("Panel.qml")
     visible: false
     onLoaded: {
       root.injectPanel()
-      Qt.callLater(root.injectPanel)
+      Qt.callLater(function() {
+        root.injectPanel()
+        var shouldOpen = root.panelOpenRequested
+        root.panelOpenRequested = false
+        if (shouldOpen && panelLoader.item) panelLoader.item.open()
+      })
     }
   }
 
@@ -99,16 +126,8 @@ BarWidget {
     anchors.fill: parent
     bar: root.bar
     tooltipText: "Gravity"
-    // The mark never stops turning, panel open or closed -- it is the one
-    // thing in the bar that says this widget is watching what you launch.
-    //
-    // It used to speed up while the orbit was on screen. That is gone: `speed`
-    // feeds the glyph's animator durations, and changing a running animator's
-    // duration restarts it, so animating the speed restarted the rotation on
-    // every frame of the transition and the mark visibly stalled. A flourish
-    // that costs the one animation that is supposed to be perpetual is not
-    // worth it -- and the bar sits under the panel's scrim while open, so
-    // almost nobody ever saw it.
+    // Keep the mark static. A tiny always-running orbital animation in every
+    // monitor's bar adds background render work without helping the launcher.
     iconComponent: Component {
       Item {
         OrbitGlyph {
@@ -117,6 +136,7 @@ BarWidget {
           height: parent.height
           coreColor: Color.accent
           satelliteColor: button.foreground
+          spinning: false
         }
       }
     }

@@ -20,12 +20,13 @@ days** — not by a favourites list you have to maintain.
 
 ## What makes it different
 
-Gravity counts **every** window that opens on your desktop, not just the ones
-launched from its own panel. It listens to Hyprland's event socket for the
-whole session, so opening v2rayN from a keybinding, a terminal, an autostart
-or a link handler all count the same. If v2rayN is the first thing you reach
-for after a boot, it climbs into the ring on its own, and nobody had to
-configure anything.
+After you open Gravity for the first time, it counts **every** window that opens
+on your desktop, not just the ones launched from its own panel. It listens to
+Hyprland's event socket for the rest of the session, so opening v2rayN from a
+keybinding, a terminal, an autostart or a link handler all count the same. That
+first open is the opt-in: before it, the tracker, timers, file watcher and icon
+scans stay dormant. Once opted in, tracking resumes on later shell starts so
+the ranking continues to reflect system-wide use.
 
 ## Features
 
@@ -35,8 +36,9 @@ configure anything.
   the window, so an app you hammered last week is gone without you doing
   anything. What is on the ring is what you are using *now*, not a lifetime
   scoreboard that the first month of use freezes in place.
-- **System-wide tracking.** Counts come from Hyprland's `openwindow` stream, so
-  they reflect how you use the machine, not how you use this widget.
+- **System-wide tracking, after first use.** Counts come from Hyprland's
+  `openwindow` stream, so they reflect how you use the machine, not how you use
+  this widget. Nothing is tracked until you open Gravity once.
 - **Launch or focus.** Clicking an app focuses its window if one exists, and
   launches it if not. The window it focuses is deterministic — always the first
   one Hyprland lists for that class — so the same click lands in the same place
@@ -52,6 +54,9 @@ configure anything.
   memory rather than a row you have to read.
 - **Icons burst out from the centre**, one after another with a beat between
   them, and collapse back the same way on close.
+- **Low-overhead motion.** The six icons share one render-thread rotation
+  transform instead of recalculating their positions individually, and the
+  motion pauses while you aim at an app.
 - **Keyboard driven.** Arrows, Tab, or `1`–`6` select; Enter activates; Esc
   closes. Focus is grabbed as the panel opens, so the keyboard works
   immediately.
@@ -128,28 +133,34 @@ directory and never edits your Hyprland or Omarchy configuration.
 - **Commands:** `mkdir -p` for the state directory, `hyprctl clients -j` and
   `hyprctl dispatch focuswindow` to focus a running app, and
   `uwsm-app -- gtk-launch` to launch one.
-- **Icon lookup:** one read-only `find` at startup (two invocations, no shell)
-  lists icon *file names*, never contents, under `~/.local/share/icons`,
+- **Icon lookup:** on first panel open, two read-only `find` invocations (no
+  shell) list icon *file names*, never contents, under `~/.local/share/icons`,
   `/usr/share/icons`, `/usr/share/pixmaps`, `/opt` and `/usr/share`. The list is
   kept only in memory and is never written anywhere.
 - **Writes:** only the usage store, `~/.local/state/omarchy/gravity/`.
+- **Idle behavior:** before Gravity has been opened once, its service does not
+  create the state directory, listen to Hyprland, run timers, or scan icons. It
+  reads the small state file once to determine whether you previously opted in.
 - **Network, `sudo`:** none.
 
 ## Icons
 
 Each slot looks for an icon in this order: the desktop entry's own icon, the
-system icon theme, a direct lookup of the icon file on disk, and finally a
-letter tile showing the app's first letter. A broken or missing system icon
-theme (for example `gsettings` pointing at a theme that is not installed) used
-to leave slots blank; Gravity now works around that by finding the file
-itself. When an icon cannot be loaded, a letter tile is shown instead.
+system icon theme, a direct lookup of the icon file on disk, a plugin-bundled
+icon when available, and finally a letter tile showing the app's first letter.
+Gravity bundles OpenCode's official dark square logo because its AppImage does
+not install the brand asset in the standard icon search paths. A broken or missing
+system icon theme (for example `gsettings` pointing at a theme that is not
+installed) used to leave slots blank; Gravity now works around that by finding
+the file itself. When an icon cannot be loaded, a letter tile is shown instead.
 
 ## Usage
 
-Click the turning mark in the bar, or press the shortcut. The panel opens
-centred on the screen and the icons burst out from the middle one after
-another. Click an app to launch or focus it; click anywhere else, or press
-Esc, to dismiss.
+Click the mark in the bar, or press the shortcut. On the first open, Gravity
+starts its system-wide tracker; after that it resumes automatically on later
+shell starts. The panel opens centred on the screen and the icons burst out
+from the middle one after another. Click an app to launch or focus it; click
+anywhere else, or press Esc, to dismiss.
 
 ### The keyboard shortcut
 
@@ -381,8 +392,10 @@ accumulate.
 The counting lives in a `service` plugin rather than in the bar widget on
 purpose: the shell mounts a service once per session, while a bar widget exists
 once per monitor. Counting in the widget would double every launch on a
-two-screen setup. One writer, any number of readers — the panel watches the
-file.
+two-screen setup. The service stays dormant until the first panel open; after
+that, one writer tracks the session and any open panel reads the file. The panel
+itself is also lazy-loaded, so a fresh shell does not scan icons or create an
+overlay window for a plugin the user has not opened.
 
 ## Development
 
