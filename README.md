@@ -54,9 +54,10 @@ the ranking continues to reflect system-wide use.
   memory rather than a row you have to read.
 - **Icons burst out from the centre**, one after another with a beat between
   them, and collapse back the same way on close.
-- **Low-overhead motion.** The six icons share one render-thread rotation
-  transform instead of recalculating their positions individually, and the
-  motion pauses while you aim at an app.
+- **Low-overhead motion.** The six icons share one rotation transform instead
+  of recalculating their positions individually. Chips stay upright, and the
+  motion pauses while you aim at an app. Ring rotation runs only while the
+  surface is mapped and respects Omarchy's animation setting.
 - **Keyboard driven.** Arrows, Tab, or `1`–`6` select; Enter activates; Esc
   closes. Focus is grabbed as the panel opens, so the keyboard works
   immediately.
@@ -419,6 +420,12 @@ checkout, reload with:
 ```bash
 omarchy-restart-shell
 ```
+
+For release smoke tests, restart the shell even with a real-directory install:
+a rescan can retain cached components and hide a first-open regression. Check
+the first open after each restart as well as repeated open/close cycles; verify
+that Quickshell's PID remains unchanged and no new coredump appears. The
+source-contract checks in the Node suite cannot validate Qt rendering.
 
 Shell logs, including QML warnings, land in the session journal:
 

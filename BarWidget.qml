@@ -4,7 +4,7 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 
-// Gravity's bar presence: the turning mark, and the host for the orbital
+// Gravity's bar presence: a static mark, and the lazy host for the orbital
 // panel behind it.
 //
 // Structure follows the first-party popup widgets -- the bar mounts this

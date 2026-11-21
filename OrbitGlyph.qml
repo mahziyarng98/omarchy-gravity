@@ -1,7 +1,8 @@
 import QtQuick
 import qs.Commons
 
-// The Gravity mark: a core with two satellites on two tracks, always turning.
+// The Gravity mark: a core with two satellites on two tracks. The panel spins
+// it while visible; the bar opts out to avoid continuous background rendering.
 //
 // Drawn rather than set in a font, for two reasons. The bar's icon fonts have
 // nothing that reads as an orbit at 16px, and a glyph cannot move -- and the

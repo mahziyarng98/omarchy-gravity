@@ -289,12 +289,9 @@ Panel {
       Quickshell.execDetached(["omarchy-shell", "-q", "gravity-usage", "start"])
     }
     usageFile.reload()
-    // Deliberately no appLibrary.refreshIcons() here. Triggering the shell's
-    // icon-index rescan as this surface maps crashed Qt 6.12's scene-graph
-    // batcher (QSGBatchRenderer::prepareRenderPass, SIGSEGV in the render
-    // thread) on every open. Gravity resolves icons from its own index and
-    // Quickshell.iconPath, so it does not need the shell-wide rescan; the
-    // dock and menu refresh on their own when they open.
+    // Gravity resolves icons from its own index and Quickshell.iconPath.
+    // A shell-wide appLibrary.refreshIcons() rescan is unnecessary here and
+    // would add unrelated work while the panel surface maps.
     root.selectedIndex = -1
     root.cursorActive = false
     root.hoverActive = false
@@ -503,15 +500,18 @@ Panel {
     onTriggered: root.windowRevision++
   }
 
-  // Run the single shared rotation on the render thread. Per-icon x/y bindings
-  // remain static, avoiding six GUI-thread geometry recalculations per frame.
-  RotationAnimator {
+  // Keep this transform on the GUI thread. The render-thread RotationAnimator
+  // crashed Qt 6.12's scene-graph batcher on a fresh shell's first panel open.
+  // A shared NumberAnimation still avoids per-frame position calculations,
+  // and exposes the live angle for upright chips and correct pointer picking.
+  NumberAnimation {
     target: orbit
+    property: "rotation"
     from: 0
     to: 360
-    duration: root.orbitMs
+    duration: Style.duration(root.orbitMs)
     loops: Animation.Infinite
-    running: root.opened
+    running: root.staged && Style.duration(root.orbitMs) > 0
     paused: root.frozen
   }
 
@@ -859,6 +859,9 @@ Panel {
               // scale lives on the child so the two never fight over one
               // property or damp each other's animation.
               scale: 0.35 + 0.65 * Math.min(1, sat.burst)
+              // Keep artwork, pin marks and number labels upright while the
+              // shared parent carries each chip around the ring.
+              rotation: -orbit.rotation
 
               Item {
                 id: chip

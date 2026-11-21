@@ -433,5 +433,22 @@ check("a local icon outranks hicolor",
 check("junk lines are ignored",
   Object.keys(O.parseIconIndex("not a path\n\n/usr/share/icons/x.png")).length, 1)
 
+// Source-level guardrails only: they prevent accidentally restoring the known
+// unsafe animator, but cannot establish that Qt renders correctly. The release
+// smoke test must still open the panel after a full shell restart.
+console.log("Panel motion source contracts (not a runtime render test)")
+var panelSource = fs.readFileSync(path.join(__dirname, "..", "Panel.qml"), "utf8")
+var orbitMotion = panelSource.match(/NumberAnimation\s*\{\s*target:\s*orbit\b([^}]*)\}/)
+check("the shared orbit uses a GUI-thread NumberAnimation", orbitMotion !== null, true)
+var orbitMotionBody = orbitMotion ? orbitMotion[1] : ""
+check("the shared animation updates the rotation property",
+  /property:\s*"rotation"/.test(orbitMotionBody), true)
+check("orbit motion waits for the mapped surface and respects disabled animations",
+  /running:\s*root\.staged\s*&&\s*Style\.duration\(root\.orbitMs\)\s*>\s*0/.test(orbitMotionBody), true)
+check("selecting an app pauses the shared motion",
+  /paused:\s*root\.frozen/.test(orbitMotionBody), true)
+check("chips counter-rotate to stay upright",
+  /rotation:\s*-orbit\.rotation/.test(panelSource), true)
+
 console.log(failures === 0 ? "\nAll checks passed." : "\n" + failures + " check(s) failed.")
 process.exit(failures === 0 ? 0 : 1)
